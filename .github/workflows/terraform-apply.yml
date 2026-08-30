@@ -1,0 +1,51 @@
+name: Terraform Apply
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+
+    env:
+      TF_VAR_snowflake_organization_name: xygpmhm
+      TF_VAR_snowflake_account_name: gq04150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.0"
+
+      - name: Write Snowflake private key
+        run: |
+          mkdir -p ~/.ssh/snowflake
+          echo "${{ secrets.SNOWFLAKE_PRIVATE_KEY }}" > ~/.ssh/snowflake/tf_snow_key.p8
+          chmod 600 ~/.ssh/snowflake/tf_snow_key.p8
+
+      - name: Terraform Init
+        working-directory: terraform/foundation
+        run: terraform init
+
+      - name: Terraform Apply
+        working-directory: terraform/foundation
+        run: terraform apply -auto-approve
