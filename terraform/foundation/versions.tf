@@ -11,7 +11,7 @@ terraform {
   backend "s3" {
     bucket       = "snowflake-platform-tf-state-525218385225"
     key          = "foundation/terraform.tfstate"
-    region       = "eu-west-1"
+    region       = "ap-southeast-2"
     encrypt      = true
     use_lockfile = true
   }
