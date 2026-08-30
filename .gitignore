@@ -1,0 +1,19 @@
+# Never commit state files or provider binaries
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+
+# Never commit private keys
+*.p8
+*.pem
+*.key
+
+# Local override files
+terraform.tfvars
+*.auto.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
