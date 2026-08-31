@@ -10,6 +10,10 @@
 *.pem
 *.key
 
+# Python virtual environments
+.venv/
+venv/
+
 # Local override files
 terraform.tfvars
 *.auto.tfvars
