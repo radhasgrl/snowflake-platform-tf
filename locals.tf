@@ -25,7 +25,7 @@ locals {
         data_analyst  = [local.warehouses.reporting]
         data_consumer = [local.warehouses.reporting]
         dbt_runner    = [local.warehouses.transform]
-      } : [
+        } : [
         for warehouse_name in warehouses : {
           key         = "${role_name}_${warehouse_name}"
           role_name   = role_name
@@ -43,7 +43,7 @@ locals {
         data_analyst  = [local.databases.analytics]
         data_consumer = [local.databases.analytics]
         dbt_runner    = [local.databases.analytics, local.databases.common]
-      } : [
+        } : [
         for database_name in databases : {
           key         = "${role_name}_${database_name}"
           role_name   = role_name
@@ -66,7 +66,7 @@ locals {
         data_analyst  = ["${local.databases.analytics}.STAGING", "${local.databases.analytics}.MARTS"]
         data_consumer = ["${local.databases.analytics}.MARTS"]
         dbt_runner    = ["${local.databases.analytics}.STAGING", "${local.databases.analytics}.MARTS", "${local.databases.common}.UTILS"]
-      } : [
+        } : [
         for schema_name in schemas : {
           key         = "${role_name}_${schema_name}"
           role_name   = role_name
