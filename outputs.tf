@@ -27,3 +27,11 @@ output "functional_role_names" {
     for role_name, role in snowflake_account_role.functional : role_name => role.name
   }
 }
+
+output "placeholder_masking_policy_name" {
+  value = snowflake_masking_policy.placeholder_varchar.name
+}
+
+output "placeholder_row_access_policy_name" {
+  value = snowflake_row_access_policy.placeholder_allow_all.name
+}

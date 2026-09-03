@@ -11,6 +11,18 @@ resource "snowflake_grant_privileges_to_account_role" "warehouse_usage" {
   }
 }
 
+# SYSADMIN owns DEV_COMMON_DB.UTILS; SECURITYADMIN needs this privilege to create policies there
+resource "snowflake_grant_privileges_to_account_role" "securityadmin_policy_creation" {
+  provider = snowflake
+
+  privileges        = ["CREATE MASKING POLICY", "CREATE ROW ACCESS POLICY"]
+  account_role_name = "SECURITYADMIN"
+
+  on_schema {
+    schema_name = "${local.databases.common}.UTILS"
+  }
+}
+
 resource "snowflake_grant_privileges_to_account_role" "database_usage" {
   provider = snowflake.useradmin
   for_each = local.database_grants
