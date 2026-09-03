@@ -4,8 +4,20 @@ on:
   push:
     branches: [main]
     paths:
-      - "terraform/**"
+      - "*.tf"
+      - "env/**"
+      - ".github/workflows/terraform-apply.yml"
   workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy (dev, qa, prod)"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - qa
+          - prod
 
 permissions:
   contents: read
@@ -18,6 +30,7 @@ jobs:
     env:
       TF_VAR_snowflake_organization_name: xygpmhm
       TF_VAR_snowflake_account_name: gq04150
+      TARGET_ENV: ${{ github.event.inputs.environment || 'dev' }}
 
     steps:
       - name: Checkout
@@ -44,17 +57,7 @@ jobs:
           chmod 600 ~/.ssh/snowflake/tf_snow_key.p8
 
       - name: Terraform Init
-        working-directory: terraform/foundation
-        run: terraform init
+        run: terraform init -backend-config="env/${{ env.TARGET_ENV }}/backend.hcl"
 
       - name: Terraform Apply
-        working-directory: terraform/foundation
-        run: terraform apply -auto-approve
-
-      - name: Terraform Init RBAC
-        working-directory: terraform/rbac
-        run: terraform init
-
-      - name: Terraform Apply RBAC
-        working-directory: terraform/rbac
-        run: terraform apply -auto-approve
+        run: terraform apply -var-file="env/${{ env.TARGET_ENV }}/${{ env.TARGET_ENV }}.tfvars" -auto-approve

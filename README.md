@@ -36,12 +36,20 @@ GitHub Actions (CI/CD)
 
 AWS (ap-southeast-2 / Sydney)
  └── S3 bucket: snowflake-platform-tf-state-525218385225
-      └── foundation/terraform.tfstate   ← encrypted, versioned
+      ├── workload/dev/terraform.tfstate    ← encrypted, versioned
+      ├── workload/qa/terraform.tfstate
+      └── workload/prod/terraform.tfstate
 
 Snowflake Account: xygpmhm-gq04150
  ├── TERRAFORM_SVC service user (RSA key-pair auth, no password)
- └── Managed objects: databases, schemas, warehouses, roles, policies…
+ └── Managed objects: databases, schemas, warehouses, roles, grants…
 ```
+
+This repository follows a single-root, domain-file layout — the same pattern
+used across the platform's production AWS Terraform repositories (flat,
+domain-named `.tf` files at the root, environment config in `env/<env>/`,
+one state file per environment). `bootstrap/` remains an isolated, one-time
+stack because it creates the S3 backend that everything else depends on.
 
 ---
 
@@ -51,26 +59,34 @@ Snowflake Account: xygpmhm-gq04150
 .
 ├── .github/
 │   └── workflows/
-│       ├── terraform-plan.yml      # Runs terraform plan on Pull Requests
-│       └── terraform-apply.yml     # Runs terraform apply on merge to main
-├── terraform/
-│   ├── bootstrap/                  # One-time setup: creates S3 state bucket
-│   │   ├── main.tf
-│   │   ├── variables.tf
-│   │   ├── outputs.tf
-│   │   └── versions.tf
-│   └── foundation/                 # Core Snowflake objects (DBs, schemas, warehouses)
-│       ├── main.tf
-│       ├── providers.tf
-│       ├── variables.tf
-│       ├── outputs.tf
-│       └── versions.tf
-│   └── rbac/                      # Environment-aware roles and grants
-│       ├── main.tf
-│       ├── providers.tf
-│       ├── variables.tf
-│       ├── outputs.tf
-│       └── versions.tf
+│       ├── terraform-plan.yml      # Runs terraform plan on Pull Requests / manual dispatch
+│       └── terraform-apply.yml     # Runs terraform apply on merge to main / manual dispatch
+├── bootstrap/                      # One-time setup: creates the S3 state bucket (isolated stack)
+│   ├── main.tf
+│   ├── variables.tf
+│   ├── outputs.tf
+│   └── versions.tf
+├── env/                             # Per-environment tfvars + backend config
+│   ├── dev/
+│   │   ├── dev.tfvars
+│   │   └── backend.hcl
+│   ├── qa/
+│   │   ├── qa.tfvars
+│   │   └── backend.hcl
+│   └── prod/
+│       ├── prod.tfvars
+│       └── backend.hcl
+├── terraform.tf                     # Version pin + partial S3 backend
+├── providers.tf                     # SYSADMIN / USERADMIN / SECURITYADMIN provider aliases
+├── context.tf                       # Environment naming context (local.env, comment standard)
+├── variables.tf
+├── locals.tf                        # Database/warehouse/role naming + grant maps
+├── databases.tf                     # Snowflake databases
+├── schemas.tf                       # Snowflake schemas
+├── warehouses.tf                    # Snowflake warehouses
+├── roles.tf                         # Functional roles + role hierarchy
+├── grants.tf                        # Warehouse/database/schema/table grants
+├── outputs.tf
 ├── .gitignore
 ├── .terraform-version              # Pins Terraform to 1.16.0
 └── README.md
@@ -169,7 +185,7 @@ aws configure
 ### Mandatory notes
 - The public key pasted into Snowflake must have the `-----BEGIN PUBLIC KEY-----` / `-----END PUBLIC KEY-----` lines **removed** — paste only the base64 body.
 - The private key file (`.p8`) must **never be committed** to git — it is covered by `.gitignore`.
-- Three provider aliases in `terraform/foundation/providers.tf` each use a different Snowflake role to enforce least-privilege:
+- Three provider aliases in [providers.tf](providers.tf) each use a different Snowflake role to enforce least-privilege:
   - Default provider → `SYSADMIN` (databases, schemas, warehouses)
   - `snowflake.useradmin` → role and user management
   - `snowflake.securityadmin` → masking and row access policies
@@ -187,38 +203,41 @@ aws configure
 | Bucket encryption | AES256 server-side encryption |
 | Public access | All public access blocked |
 | State locking | `use_lockfile = true` in S3 backend (no DynamoDB needed) |
-| State file location | `s3://snowflake-platform-tf-state-525218385225/foundation/terraform.tfstate` |
+| State file location | `s3://snowflake-platform-tf-state-525218385225/workload/<env>/terraform.tfstate` |
+
+Each environment (`dev`, `qa`, `prod`) gets its own state key, its own backend
+config file, and its own tfvars file — see [env/](env/).
 
 ### How it was done
 
 The bootstrap module uses a **local** Terraform state (intentionally — it bootstraps the remote backend).
 
 ```powershell
-cd terraform/bootstrap
+cd bootstrap
 terraform init
 terraform apply -auto-approve
 ```
 
-`terraform/foundation/versions.tf` was then updated to use the S3 backend:
+[terraform.tf](terraform.tf) then declares a **partial** S3 backend at the repo root, with per-environment values supplied at init time:
 
 ```hcl
-backend "s3" {
-  bucket       = "snowflake-platform-tf-state-525218385225"
-  key          = "foundation/terraform.tfstate"
-  region       = "ap-southeast-2"
-  encrypt      = true
-  use_lockfile = true
-}
+backend "s3" {}
 ```
 
 ```powershell
-cd terraform/foundation
-terraform init   # initialises the remote S3 backend
+# Backend config lives in env/<env>/backend.hcl, e.g. env/dev/backend.hcl:
+#   bucket       = "snowflake-platform-tf-state-525218385225"
+#   key          = "workload/dev/terraform.tfstate"
+#   region       = "ap-southeast-2"
+#   encrypt      = true
+#   use_lockfile = true
+
+terraform init -backend-config="env/dev/backend.hcl"
 ```
 
 ### Mandatory notes
-- The bootstrap must be run **once only** before using the foundation module.
-- The bootstrap state (`terraform/bootstrap/terraform.tfstate`) is local and **not** pushed to git (covered by `.gitignore`).
+- The bootstrap must be run **once only** before using the workload stack.
+- The bootstrap state (`bootstrap/terraform.tfstate`) is local and **not** pushed to git (covered by `.gitignore`).
 - The S3 bucket was originally created in `eu-west-1` and later migrated to `ap-southeast-2` to align with the client's AWS region.
 
 ---
@@ -279,8 +298,9 @@ PR merged to main
 ```
 
 ### Mandatory notes
-- `workflow_dispatch:` is added to both workflows so they can be triggered manually from the GitHub Actions UI without needing a PR or push.
-- The private key is written to disk inside the runner at the exact path expected by `terraform/foundation/variables.tf` (`~/.ssh/snowflake/tf_snow_key.p8`).
+- `workflow_dispatch:` is added to both workflows with an `environment` choice input (`dev`/`qa`/`prod`), so any environment can be planned or applied manually from the GitHub Actions UI.
+- On a plain push to `main`, both workflows default to the `dev` environment.
+- The private key is written to disk inside the runner at the exact path expected by [variables.tf](variables.tf) (`~/.ssh/snowflake/tf_snow_key.p8`).
 
 ---
 
@@ -319,11 +339,11 @@ All warehouses start as `initially_suspended = true` — they only run when used
 
 ### How it was done
 
-Code was written in `terraform/foundation/main.tf` and pushed to `main`.
-The `terraform-apply.yml` pipeline triggered automatically and applied the changes.
+Code was written in [databases.tf](databases.tf), [schemas.tf](schemas.tf), and [warehouses.tf](warehouses.tf) and pushed to `main`.
+The `terraform-apply.yml` pipeline triggered automatically and applied the changes to the `dev` environment.
 
 ```powershell
-git add terraform/foundation/
+git add databases.tf schemas.tf warehouses.tf outputs.tf
 git commit -m "feat: Phase 4 - Snowflake foundation databases, schemas, warehouses (DEV)"
 git push origin main
 # Pipeline ran and created all 10 resources in Snowflake
@@ -367,8 +387,8 @@ aws s3api get-bucket-versioning --bucket snowflake-platform-tf-state-52521838522
 # Expected: { "Status": "Enabled" }
 
 # Verify state file is present
-aws s3 ls s3://snowflake-platform-tf-state-525218385225/foundation/ --region ap-southeast-2
-# Expected: terraform.tfstate (approx 57 KB)
+aws s3 ls s3://snowflake-platform-tf-state-525218385225/workload/dev/ --region ap-southeast-2
+# Expected: terraform.tfstate
 
 # Verify encryption
 aws s3api get-bucket-encryption --bucket snowflake-platform-tf-state-525218385225 --region ap-southeast-2
@@ -407,13 +427,13 @@ $gh = "C:\Program Files\GitHub CLI\gh.exe"
 # Session setup (required each new terminal)
 $env:PATH = "C:\tools\terraform;C:\Users\radha.a.singh\AppData\Local\Programs\Python\Python311\Scripts;C:\Program Files\GitHub CLI;" + $env:PATH
 
-cd "C:\Users\radha.a.singh\OneDrive - Accenture\Documents\Snowflake_Platform_TF\terraform\foundation"
+cd "C:\Users\radha.a.singh\OneDrive - Accenture\Documents\Snowflake_Platform_TF"
 
-# Confirm backend points to Sydney and state is accessible
-terraform init
+# Confirm backend points to Sydney and state is accessible (dev environment)
+terraform init -backend-config="env/dev/backend.hcl"
 
 # Confirm no drift — should show "No changes. Infrastructure is up-to-date."
-terraform plan
+terraform plan -var-file="env/dev/dev.tfvars"
 ```
 
 ---
@@ -427,6 +447,7 @@ terraform plan
 | State storage | AWS S3 + `use_lockfile` | Secure, versioned, no DynamoDB required |
 | State region | `ap-southeast-2` (Sydney) | Aligns with client's AWS region |
 | Environment strategy | Single account, env-prefix naming | `DEV_`, `QA_`, `PROD_` prefixes on all objects |
+| Repository layout | Single root stack, flat domain files | Matches the platform's production AWS Terraform repo conventions |
 | Snowflake provider | `snowflakedb/snowflake ~> 2.0` | Resolved to v2.20.0 |
 | CI/CD | GitHub Actions | Already used for source control |
 

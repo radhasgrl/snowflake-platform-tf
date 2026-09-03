@@ -21,3 +21,9 @@ output "transform_warehouse_name" {
 output "reporting_warehouse_name" {
   value = snowflake_warehouse.reporting.name
 }
+
+output "functional_role_names" {
+  value = {
+    for role_name, role in snowflake_account_role.functional : role_name => role.name
+  }
+}
