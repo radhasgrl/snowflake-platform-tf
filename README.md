@@ -65,6 +65,12 @@ Snowflake Account: xygpmhm-gq04150
 │       ├── variables.tf
 │       ├── outputs.tf
 │       └── versions.tf
+│   └── rbac/                      # Environment-aware roles and grants
+│       ├── main.tf
+│       ├── providers.tf
+│       ├── variables.tf
+│       ├── outputs.tf
+│       └── versions.tf
 ├── .gitignore
 ├── .terraform-version              # Pins Terraform to 1.16.0
 └── README.md
@@ -442,5 +448,5 @@ Set-Location "C:\Users\radha.a.singh\OneDrive - Accenture\Documents\Snowflake_Pl
 
 | Phase | Scope | Status |
 |---|---|---|
-| Phase 5 | RBAC — functional roles, grants, masking policies, row access policies | ⬜ Not started |
+| Phase 5 | RBAC — functional roles, grants, masking policies, row access policies | 🟡 Foundation implemented; masking/RLS require client rules |
 | Phase 6 | dbt integration + schema change migrations (schemachange/Flyway) | ⬜ Not started |

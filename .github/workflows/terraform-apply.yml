@@ -50,3 +50,11 @@ jobs:
       - name: Terraform Apply
         working-directory: terraform/foundation
         run: terraform apply -auto-approve
+
+      - name: Terraform Init RBAC
+        working-directory: terraform/rbac
+        run: terraform init
+
+      - name: Terraform Apply RBAC
+        working-directory: terraform/rbac
+        run: terraform apply -auto-approve

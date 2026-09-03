@@ -71,3 +71,31 @@ jobs:
       - name: Fail if plan failed
         if: steps.plan.outcome == 'failure'
         run: exit 1
+
+      - name: Terraform Init RBAC
+        working-directory: terraform/rbac
+        run: terraform init
+
+      - name: Terraform Plan RBAC
+        id: rbac_plan
+        working-directory: terraform/rbac
+        run: terraform plan -no-color 2>&1 | tee plan_output.txt
+        continue-on-error: true
+
+      - name: Post RBAC plan as PR comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('terraform/rbac/plan_output.txt', 'utf8');
+            const truncated = plan.length > 60000 ? plan.slice(0, 60000) + '\n\n...output truncated' : plan;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## Terraform RBAC Plan\n\`\`\`\n${truncated}\n\`\`\``
+            });
+
+      - name: Fail if RBAC plan failed
+        if: steps.rbac_plan.outcome == 'failure'
+        run: exit 1
