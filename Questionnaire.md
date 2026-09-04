@@ -32,17 +32,19 @@ Navigate to `github.com/radhasgrl/snowflake-platform-tf` and walk through:
 Walk through files in this order:
 
 ```
-terraform/bootstrap/          →  "One-time setup — creates the S3 state bucket in Sydney (ap-southeast-2)"
+bootstrap/                    →  "One-time setup — creates the S3 state bucket in Sydney (ap-southeast-2)"
 
-terraform/foundation/
-  versions.tf                 →  "Backend points to S3 — state is remote, encrypted, versioned"
-  providers.tf                →  "Three provider aliases — least privilege per operation type"
-  variables.tf                →  "environment variable drives all naming — DEV_, QA_, PROD_"
-  main.tf                     →  "All Snowflake objects declared here — databases, schemas, warehouses"
-  outputs.tf                  →  "Outputs feed downstream modules — RBAC and dbt will consume these"
+terraform.tf                  →  "Version pin + partial S3 backend — state is remote, encrypted, versioned"
+providers.tf                  →  "Three provider aliases — least privilege per operation type"
+context.tf / locals.tf        →  "environment variable drives all naming — DEV_, QA_, PROD_"
+databases.tf / schemas.tf     →  "Core Snowflake objects — databases and schemas"
+warehouses.tf                 →  "Compute — environment-sized warehouses, auto-suspend by default"
+roles.tf / grants.tf          →  "RBAC — functional roles and every privilege declared as code"
+masking.tf / row_access.tf    →  "Security policy pattern — wired up now, real rules pending client input"
+env/dev/ (dev.tfvars + backend.hcl)  →  "Per-environment config — same code, different environment"
 ```
 
-**Key message to deliver on `main.tf`:**
+**Key message to deliver on `databases.tf`/`warehouses.tf`:**
 > *"One variable change — `environment = prod` — and this entire stack provisions a production-grade Snowflake environment with correctly sized warehouses. No human intervention."*
 
 ---
@@ -69,6 +71,8 @@ Open the Snowflake UI and navigate to:
 | **Data → Databases** | `DEV_LANDING_DB`, `DEV_ANALYTICS_DB`, `DEV_COMMON_DB` and their schemas |
 | **Admin → Warehouses** | 3 DEV warehouses, all SUSPENDED (correct — they start on demand) |
 | **Admin → Users** | `TERRAFORM_SVC` — *"Service account, no password, RSA key only"* |
+| **Admin → Roles** | `DEV_DATA_ENGINEER`, `DEV_DATA_ANALYST`, `DEV_DATA_CONSUMER`, `DEV_DBT_RUNNER` — *"Every grant is declared in Terraform, not clicked"* |
+| Masking/Row Access policies (SQL: `SHOW MASKING POLICIES`, `SHOW ROW ACCESS POLICIES`) | *"The security policy pattern is wired up — the real rules are pending your answers to the questionnaire below"* |
 
 **Closing message:**
 > *"None of this was clicked. It was all applied by the pipeline when code merged to main."*
@@ -131,6 +135,10 @@ Capture answers before any architecture decisions are made.
 | 22 | Are branch protection rules and approval gates required on main? | Enforces plan-before-apply and mandatory reviewer workflow |
 | 23 | Multiple teams or multiple repos contributing to the platform? | Drives Terraform module strategy and state isolation per team |
 | 24 | Existing CI/CD tooling beyond GitHub Actions? (Jenkins, Azure DevOps, Harness?) | May require pipeline adapters or parallel toolchain |
+| 25 | Does the client's AWS account already have a GitHub OIDC identity provider configured (from another project)? | Avoids creating a duplicate/conflicting OIDC provider when migrating off static IAM keys |
+| 26 | Who holds `ACCOUNTADMIN` access in Snowflake to create a new `WORKLOAD_IDENTITY` service user? | This one-time setup step cannot be done by Terraform — needs a named human owner |
+| 27 | Is a change-freeze or formal approval process required before modifying how the pipeline authenticates to production systems? | OIDC migration changes the trust boundary of every future deployment |
+| 28 | Should each environment (dev/qa/prod) have its own scoped trust identity, or is one shared identity acceptable? | Determines whether OIDC migration needs one IAM role/Snowflake user per environment, or just one overall |
 
 ---
 
@@ -139,7 +147,7 @@ Capture answers before any architecture decisions are made.
 | Point | What to say |
 |---|---|
 | **It scales** | Adding a new data domain is one `snowflake_database` + `snowflake_schema` block. No tickets, no manual work. |
-| **RBAC is next** | Phase 5 adds roles, grants, masking and row-level security — all Terraform-managed, every change auditable in git history. |
+| **RBAC is implemented** | Phase 5 roles, grants, and the masking/row-access policy pattern are live and Terraform-managed — real PII/RLS rules are the only piece pending your answers above. |
 | **Environment promotion is code** | `QA_` and `PROD_` environments are created by changing one variable — not by repeating manual steps across environments. |
 | **State is the safety net** | Terraform knows exactly what exists in Snowflake. Any manual change made outside Terraform is detected on the next `plan`. |
 | **No credentials in code** | Private keys, AWS access keys, and account identifiers are all in GitHub Secrets — never in the repository. |

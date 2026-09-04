@@ -172,6 +172,40 @@ DataOps extends authorization across environments, not just within one account:
 
 ---
 
+## OIDC Migration Readiness
+
+Before starting the OIDC hardening phase (currently parked), gather the
+following — technical prerequisites first, then client-specific questions.
+
+### Technical Prerequisites
+
+| Item | AWS side | Snowflake side |
+|---|---|---|
+| Trust configuration | IAM OIDC Identity Provider trusting `token.actions.githubusercontent.com` | Service user with `WORKLOAD_IDENTITY (TYPE = OIDC, ISSUER = 'https://token.actions.githubusercontent.com', SUBJECT = '...')` |
+| Scoping | IAM Role trust policy scoped to a specific `repo:<org>/<repo>:ref:refs/heads/<branch>` subject claim | `SUBJECT` claim on the service user scoped the same way |
+| Permissions | Same S3 bucket permissions the current IAM user has, attached to the new role instead | Same roles granted to `TERRAFORM_SVC` today, granted to the new OIDC service user |
+| Workflow changes | Add `permissions: id-token: write`; replace `aws-actions/configure-aws-credentials` static-key inputs with `role-to-assume` | Replace the "write private key to disk" step with Snowflake CLI OIDC token exchange |
+| Version requirement | None | Snowflake CLI ≥ 3.11 (already satisfied — currently on 3.25.0) |
+| Cutover | Keep both static-key and OIDC paths working in parallel until verified, then remove `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` secrets | Keep `TERRAFORM_SVC` as a manual-run fallback identity; new OIDC user becomes pipeline-only |
+
+### Client Questions to Gather First
+
+| # | Question | Why it matters |
+|---|---|---|
+| 1 | Is this GitHub repository staying on GitHub Cloud, or moving to GitHub Enterprise (self-hosted)? | Changes the OIDC issuer URL and trust configuration on both AWS and Snowflake |
+| 2 | Will deployments always come from `main`, or do multiple branches/environments need their own scoped trust (e.g. `dev`/`qa`/`prod` branches)? | Determines whether one IAM role + one Snowflake service user is enough, or one per environment is needed |
+| 3 | Does the client's AWS account already have an existing GitHub OIDC provider configured (from another project)? | Avoids creating a duplicate/conflicting OIDC provider in the same AWS account |
+| 4 | Are there existing IAM Service Control Policies (SCPs) that restrict creating IAM OIDC providers or roles? | May require a platform/security team ticket before this can be self-served |
+| 5 | Who has `ACCOUNTADMIN` access in Snowflake to create the new `WORKLOAD_IDENTITY` service user? | This step cannot be done by Terraform — it's a one-time manual SQL step by a human with the right role |
+| 6 | Is there a change-freeze or approval process required before modifying how the pipeline authenticates to production systems? | OIDC migration touches the trust boundary of every future deployment — may need a formal change record |
+
+> **Note:** these are not yet part of `Questionnaire.md` — recommended to be
+> added there once Phase 3.5 is picked back up, since they are genuinely new
+> questions beyond what's already captured (Q17 and Q20 cover related but not
+> identical ground).
+
+---
+
 ## Demo Talking Points
 
 1. **Show the trust chain diagram** — one pipeline run, two independent authentications (AWS + Snowflake), zero human credentials involved.

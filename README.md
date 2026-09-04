@@ -14,8 +14,10 @@ with CI/CD via GitHub Actions and remote state in AWS S3.
 5. [Phase 2 — Terraform Remote State (AWS S3)](#phase-2--terraform-remote-state-aws-s3)
 6. [Phase 3 — GitHub Actions CI/CD](#phase-3--github-actions-cicd)
 7. [Phase 4 — Snowflake Foundation Objects](#phase-4--snowflake-foundation-objects)
-8. [Verification Guide](#verification-guide)
-9. [Key Decisions](#key-decisions)
+8. [Phase 5 — RBAC & Security Policies](#phase-5--rbac--security-policies)
+9. [Verification Guide](#verification-guide)
+10. [Key Decisions](#key-decisions)
+11. [New Session Setup](#new-session-setup)
 10. [New Session Setup](#new-session-setup)
 
 ---
@@ -348,6 +350,57 @@ git commit -m "feat: Phase 4 - Snowflake foundation databases, schemas, warehous
 git push origin main
 # Pipeline ran and created all 10 resources in Snowflake
 ```
+
+---
+
+## Phase 5 — RBAC & Security Policies
+
+### What was created
+
+#### Functional Roles
+
+| Terraform Resource | Snowflake Name | Purpose |
+|---|---|---|
+| `snowflake_account_role.functional["data_engineer"]` | `DEV_DATA_ENGINEER` | Full read/write across landing, analytics, and common schemas |
+| `snowflake_account_role.functional["data_analyst"]` | `DEV_DATA_ANALYST` | Read access to staging and marts |
+| `snowflake_account_role.functional["data_consumer"]` | `DEV_DATA_CONSUMER` | Read access to marts only |
+| `snowflake_account_role.functional["dbt_runner"]` | `DEV_DBT_RUNNER` | Read/write on staging for dbt transformations |
+
+All four roles are granted upward to `SYSADMIN` so ownership is never orphaned.
+
+#### Grants
+
+Every warehouse, database, schema, and table-level privilege is declared in
+[grants.tf](grants.tf) — current-table and future-table `SELECT` grants are
+both included, so new tables created later automatically inherit the correct
+access for `data_analyst`/`data_consumer` without a manual grant.
+
+#### Security Policy Pattern (Placeholders)
+
+| Terraform Resource | Snowflake Name | Status |
+|---|---|---|
+| `snowflake_masking_policy.placeholder_varchar` | `DEV_PLACEHOLDER_VARCHAR_MASK` | No-op — passes VARCHAR values through unmasked |
+| `snowflake_row_access_policy.placeholder_allow_all` | `DEV_PLACEHOLDER_ALLOW_ALL_RAP` | No-op — allows all rows through |
+
+Both policies exist in [masking.tf](masking.tf) and [row_access.tf](row_access.tf)
+so the attachment pattern is demo-able. Real masking/RLS rules are pending the
+client's answers to `Questionnaire.md` (PII columns, row-level access rules).
+
+Creating these policies required one additional grant: `SYSADMIN` owns
+`DEV_COMMON_DB.UTILS`, so it must explicitly grant `CREATE MASKING POLICY` and
+`CREATE ROW ACCESS POLICY` to `SECURITYADMIN` before `SECURITYADMIN` can create
+anything there — see `securityadmin_policy_creation` in [grants.tf](grants.tf).
+
+### How it was done
+
+Code was written in [roles.tf](roles.tf), [grants.tf](grants.tf),
+[masking.tf](masking.tf), and [row_access.tf](row_access.tf), pushed to `main`,
+and applied automatically by `terraform-apply.yml` — same pipeline, same
+`dev` environment, no new infrastructure required.
+
+### Mandatory notes
+- Masking and row access policies must be created by a role with the schema-level `CREATE MASKING POLICY`/`CREATE ROW ACCESS POLICY` privilege — not automatically available to `SECURITYADMIN` on schemas owned by `SYSADMIN`.
+- The Terraform provider requires exactly one `on_account_object`/`on_schema` block per grant resource — looping with `for_each` over multiple objects in a single resource is not supported and will error with "Too many blocks".
 
 ---
 
