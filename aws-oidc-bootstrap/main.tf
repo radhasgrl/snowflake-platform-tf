@@ -28,7 +28,10 @@ resource "aws_iam_role" "github_actions_terraform" {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
           }
           StringLike = {
-            "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}/${var.github_repo}:*"
+            # GitHub's current sub claim format includes stable account/repo IDs
+            # (e.g. repo:owner@ownerId/repo@repoId:ref:...), not just owner/repo.
+            # This is more secure than name-based matching (immune to repo renames).
+            "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}@*/${var.github_repo}@*:*"
           }
         }
       }
