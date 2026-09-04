@@ -15,11 +15,12 @@ delivered exclusively through pipelines) possible.
 3. [Pipeline → AWS Authentication](#pipeline--aws-authentication)
 4. [Secrets Management Patterns](#secrets-management-patterns)
 5. [Authorization-as-Code (Snowflake RBAC via Terraform)](#authorization-as-code-snowflake-rbac-via-terraform)
-6. [Environment Promotion & Change Control](#environment-promotion--change-control)
-7. [What We Implemented in This POC](#what-we-implemented-in-this-poc)
-8. [What We Recommend for Production](#what-we-recommend-for-production)
-9. [Demo Talking Points](#demo-talking-points)
-10. [Decision Matrix Summary](#decision-matrix-summary)
+6. [Concurrency & Multi-Developer Change Control](#concurrency--multi-developer-change-control)
+7. [Environment Promotion & Change Control](#environment-promotion--change-control)
+8. [What We Implemented in This POC](#what-we-implemented-in-this-poc)
+9. [What We Recommend for Production](#what-we-recommend-for-production)
+10. [Demo Talking Points](#demo-talking-points)
+11. [Decision Matrix Summary](#decision-matrix-summary)
 
 ---
 
@@ -106,6 +107,31 @@ across environments.
 
 ---
 
+## Concurrency & Multi-Developer Change Control
+
+With more than one developer, the risk is not *authentication* — it's two
+people's changes racing to `apply` against the same Snowflake account at the
+same time. This is a change-control problem, not a login problem, but it
+belongs in this document because it determines *when* a pipeline identity is
+allowed to act, not just *whether* it can authenticate.
+
+| Control | What it prevents | Status in this repo |
+|---|---|---|
+| **`plan` on every PR (read-only)** | Nothing — safe to run in parallel across any number of developers; no state lock is held | ✅ Implemented |
+| **State locking (`use_lockfile`)** | Two simultaneous `apply` runs corrupting the same state file | ✅ Implemented — a second run queues or fails cleanly rather than corrupting state |
+| **Pipeline concurrency group (serializes `apply` per environment)** | Two merges landing close together both triggering `apply` at once, producing a confusing lock-timeout failure instead of a clean queue | ⬜ Not yet configured — recommended |
+| **Branch protection + required PR reviewers on `main`** | A single developer merging an RBAC/grants change without a second reviewer | ⬜ Not available on a private repo under the current GitHub plan — flagged as a client discussion item, not a code gap |
+| **Re-plan immediately before merge** | A stale `plan` comment that no longer reflects another developer's change merged in the meantime | ⬜ Process discipline, not automatable — recommended as a team norm |
+
+> **Enterprise pattern worth knowing:** some remote-state backends (e.g.
+> Terraform Cloud / Terraform Enterprise) queue runs per workspace natively —
+> two applies against the same workspace simply cannot execute concurrently,
+> removing the need to hand-write a concurrency group. Our AWS S3 backend does
+> not do this automatically, which is why the concurrency group above is
+> called out as a recommended addition rather than assumed to already exist.
+
+---
+
 ## Environment Promotion & Change Control
 
 DataOps extends authorization across environments, not just within one account:
@@ -140,6 +166,8 @@ DataOps extends authorization across environments, not just within one account:
 | **Move to GitHub Environment secrets with required reviewers for `prod`** | Adds a human approval gate independent of authentication method |
 | **Replace placeholder masking/RLS policies with real client-confirmed rules** | Currently no-op; PII/row-level rules pending `Questionnaire.md` answers |
 | **Add Resource Monitors per warehouse** | Caps compute spend regardless of who/what is authorized to run queries |
+| **Add a `concurrency` group to `terraform-apply.yml` per environment** | Serializes applies so simultaneous merges queue cleanly instead of racing for the state lock |
+| **Enable branch protection + required reviewers on `main`** | Requires a paid GitHub plan (or a public repo) for a private repository — worth raising with the client if not already in place |
 | **Consider an external secrets manager if the client already runs one** | Avoids duplicating secret storage/rotation tooling the client has already standardized on |
 
 ---
