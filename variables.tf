@@ -26,3 +26,9 @@ variable "environment" {
     error_message = "environment must be one of: dev, qa, prod."
   }
 }
+
+variable "use_workload_identity" {
+  description = "Use GitHub OIDC workload identity (GITHUB_OIDC_TERRAFORM_SVC) instead of RSA key-pair (TERRAFORM_SVC) for Snowflake auth"
+  type        = bool
+  default     = false
+}

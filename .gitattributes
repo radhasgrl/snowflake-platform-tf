@@ -1,0 +1,7 @@
+# Force LF line endings for Terraform files, regardless of local git config.
+# Prevents CRLF/LF mismatches between Windows checkouts and Linux CI runners
+# from appearing as spurious diffs on multi-line string resources (e.g.
+# snowflake_execute.execute), which would otherwise force unwanted replacement.
+*.tf text eol=lf
+*.tfvars text eol=lf
+*.hcl text eol=lf
