@@ -21,9 +21,9 @@ Navigate to `github.com/radhasgrl/snowflake-platform-tf` and walk through:
 
 | What to show | Talking point |
 |---|---|
-| **Settings → Secrets and variables → Actions** | Show all 5 secrets are set, values hidden — *"Keys and credentials injected at runtime, never stored in code"* |
-| **Actions tab** | Open a successful pipeline run, walk through each step |
-| **`.github/workflows/terraform-apply.yml`** | *"This file is what runs automatically on every merge to main"* |
+| **Settings → Secrets and variables → Actions** | Show all 5 secrets are set, values hidden — *"Two of these (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`) are already unused — the pipeline now authenticates to AWS via OIDC with zero stored credentials"* |
+| **Actions tab** | Open a successful `terraform-apply.yml` run, point out the "Configure AWS credentials (OIDC)" and "Fetch Snowflake OIDC token" steps — *"No secret was read for either of these"* |
+| **`.github/workflows/terraform-apply.yml`** | *"This file is what runs automatically on every merge to main — and it's the one we've already hardened to OIDC"* |
 
 ---
 
@@ -33,14 +33,16 @@ Walk through files in this order:
 
 ```
 bootstrap/                    →  "One-time setup — creates the S3 state bucket in Sydney (ap-southeast-2)"
+aws-oidc-bootstrap/            →  "One-time, human-applied — creates the AWS OIDC provider + IAM role"
 
 terraform.tf                  →  "Version pin + partial S3 backend — state is remote, encrypted, versioned"
-providers.tf                  →  "Three provider aliases — least privilege per operation type"
+providers.tf                  →  "Three provider aliases, each switchable between key-pair and OIDC via one variable"
 context.tf / locals.tf        →  "environment variable drives all naming — DEV_, QA_, PROD_"
 databases.tf / schemas.tf     →  "Core Snowflake objects — databases and schemas"
 warehouses.tf                 →  "Compute — environment-sized warehouses, auto-suspend by default"
 roles.tf / grants.tf          →  "RBAC — functional roles and every privilege declared as code"
 masking.tf / row_access.tf    →  "Security policy pattern — wired up now, real rules pending client input"
+oidc_service_user.tf          →  "The OIDC identity the apply workflow authenticates as — no password, no key file"
 env/dev/ (dev.tfvars + backend.hcl)  →  "Per-environment config — same code, different environment"
 ```
 

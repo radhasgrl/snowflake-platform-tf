@@ -13,12 +13,13 @@ with CI/CD via GitHub Actions and remote state in AWS S3.
 4. [Phase 1 — Authentication](#phase-1--authentication)
 5. [Phase 2 — Terraform Remote State (AWS S3)](#phase-2--terraform-remote-state-aws-s3)
 6. [Phase 3 — GitHub Actions CI/CD](#phase-3--github-actions-cicd)
-7. [Phase 4 — Snowflake Foundation Objects](#phase-4--snowflake-foundation-objects)
-8. [Phase 5 — RBAC & Security Policies](#phase-5--rbac--security-policies)
-9. [Verification Guide](#verification-guide)
-10. [Key Decisions](#key-decisions)
-11. [New Session Setup](#new-session-setup)
-10. [New Session Setup](#new-session-setup)
+7. [Phase 3.5 — OIDC Hardening](#phase-35--oidc-hardening)
+8. [Phase 4 — Snowflake Foundation Objects](#phase-4--snowflake-foundation-objects)
+9. [Phase 5 — RBAC & Security Policies](#phase-5--rbac--security-policies)
+10. [Verification Guide](#verification-guide)
+11. [Key Decisions](#key-decisions)
+12. [New Session Setup](#new-session-setup)
+
 
 ---
 
@@ -32,8 +33,8 @@ GitHub Actions (CI/CD)
  ├── terraform-plan.yml   → runs on Pull Request  → posts plan as PR comment
  └── terraform-apply.yml  → runs on push to main  → applies to Snowflake
           │
-          ├── Reads AWS secrets → fetches Terraform state from S3 (ap-southeast-2)
-          ├── Reads Snowflake secrets → authenticates via RSA JWT key pair
+          ├── AuthN to AWS       → OIDC (AssumeRoleWithWebIdentity) — both workflows, no stored AWS secret
+          ├── AuthN to Snowflake → apply: OIDC (WORKLOAD_IDENTITY) | plan: RSA JWT key-pair (unchanged)
           └── Creates/manages Snowflake objects (databases, schemas, warehouses, RBAC…)
 
 AWS (ap-southeast-2 / Sydney)
@@ -257,13 +258,13 @@ terraform init -backend-config="env/dev/backend.hcl"
 
 #### GitHub Secrets
 
-| Secret Name | What it holds |
-|---|---|
-| `AWS_ACCESS_KEY_ID` | IAM user `terraform-platform-svc` access key |
-| `AWS_SECRET_ACCESS_KEY` | IAM user `terraform-platform-svc` secret key |
-| `AWS_REGION` | `ap-southeast-2` |
-| `SNOWFLAKE_ACCOUNT` | `xygpmhm-gq04150` |
-| `SNOWFLAKE_PRIVATE_KEY` | Full content of `tf_snow_key.p8` (RSA private key) |
+| Secret Name | What it holds | Status |
+|---|---|---|
+| `AWS_ACCESS_KEY_ID` | IAM user `terraform-platform-svc` access key | ⚠️ Unused since Phase 3.5 (OIDC) — pending removal |
+| `AWS_SECRET_ACCESS_KEY` | IAM user `terraform-platform-svc` secret key | ⚠️ Unused since Phase 3.5 (OIDC) — pending removal |
+| `AWS_REGION` | `ap-southeast-2` | ✅ Still used (region for OIDC role assumption) |
+| `SNOWFLAKE_ACCOUNT` | `xygpmhm-gq04150` | ✅ In use |
+| `SNOWFLAKE_PRIVATE_KEY` | Full content of `tf_snow_key.p8` (RSA private key) | ✅ Still used by `terraform-plan.yml`; unused by `terraform-apply.yml` since Phase 3.5 |
 
 ### How it was done
 
@@ -281,7 +282,7 @@ Write-Output "xygpmhm-gq04150" | & $gh secret set SNOWFLAKE_ACCOUNT --repo radha
 Get-Content ~/.ssh/snowflake/tf_snow_key.p8 | & $gh secret set SNOWFLAKE_PRIVATE_KEY --repo radhasgrl/snowflake-platform-tf
 ```
 
-### How the pipeline works
+### How the pipeline works (as originally built, Phase 3)
 
 ```
 Pull Request opened
@@ -298,6 +299,51 @@ PR merged to main
         ├── (same setup steps)
         └── terraform apply -auto-approve  (creates/updates Snowflake objects)
 ```
+
+> See [Phase 3.5](#phase-35--oidc-hardening) below — `terraform-apply.yml`'s AWS and Snowflake
+> authentication steps have since been replaced with OIDC. This section is kept
+> as the historical record of how Phase 3 was originally delivered.
+
+---
+
+## Phase 3.5 — OIDC Hardening
+
+Follows directly from the [Configure CI/CD Integrations with Snowflake](https://www.snowflake.com/en/developers/guides/configure-cicd-integrations-with-snowflake/)
+guide and AWS's own recommended pattern for GitHub Actions — replacing long-lived
+static secrets with short-lived, per-run OIDC tokens.
+
+### What was created
+
+| Item | Detail |
+|---|---|
+| AWS IAM OIDC provider | Trusts `token.actions.githubusercontent.com`, created via [aws-oidc-bootstrap/](aws-oidc-bootstrap) (human-applied, not by the pipeline's own IAM identity) |
+| AWS IAM role | `snowflake-platform-tf-github-oidc` — trust policy scoped to this repo's actual `sub` claim format |
+| Snowflake service user | `GITHUB_OIDC_TERRAFORM_SVC`, created via [oidc_service_user.tf](oidc_service_user.tf) — `WORKLOAD_IDENTITY` trust scoped to the push-to-main subject claim |
+| Provider auth switch | `providers.tf` — all 3 provider aliases gated by `var.use_workload_identity`; `terraform-apply.yml` sets it `true`, `terraform-plan.yml` leaves it `false` (unchanged, still key-pair) |
+
+### Status by workflow
+
+| Workflow | AWS auth | Snowflake auth |
+|---|---|---|
+| `terraform-apply.yml` | ✅ OIDC (`AssumeRoleWithWebIdentity`) | ✅ OIDC (`WORKLOAD_IDENTITY`) |
+| `terraform-plan.yml` | ✅ OIDC (`AssumeRoleWithWebIdentity`) | ⚪ Key-pair (`TERRAFORM_SVC`) — intentionally scoped out; see [Authentication-Authorization-Options.md](Authentication-Authorization-Options.md) for why |
+
+### Key finding during implementation
+
+GitHub's OIDC `sub` claim uses a newer, more secure format that includes stable
+account/repo IDs — `repo:owner@ownerId/repo@repoId:ref:refs/heads/main` — not the
+classic `repo:owner/repo:ref:...` pattern most examples online still show. Both
+the AWS IAM trust policy and the Snowflake `WORKLOAD_IDENTITY` `SUBJECT` were
+updated to match the actual claim (verified via a temporary debug step that
+decoded the real token).
+
+### Mandatory notes
+- Snowflake's `SUBJECT` match is an **exact string**, unlike AWS IAM's `StringLike` wildcard — this is why `terraform-plan.yml` (a different `sub` claim, PR-triggered) needs its own separate Snowflake OIDC identity, not yet built.
+- The AWS OIDC provider + role were applied by a human with elevated AWS access via CloudShell, never by the pipeline's own narrowly-scoped IAM user — see [Authentication-Authorization-Options.md](Authentication-Authorization-Options.md) for the reasoning.
+- `.gitattributes` was added to force LF line endings on `.tf`/`.tfvars`/`.hcl` files — without it, a Windows checkout of a Linux-CI-applied `snowflake_execute` resource could show a false diff and attempt to needlessly drop/recreate a resource.
+- `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` GitHub secrets are no longer read by either workflow but have not yet been deleted (pending final verification).
+
+---
 
 ### Mandatory notes
 - `workflow_dispatch:` is added to both workflows with an `environment` choice input (`dev`/`qa`/`prod`), so any environment can be planned or applied manually from the GitHub Actions UI.
@@ -450,6 +496,25 @@ aws s3api get-bucket-encryption --bucket snowflake-platform-tf-state-52521838522
 # Verify no public access
 aws s3api get-public-access-block --bucket snowflake-platform-tf-state-525218385225 --region ap-southeast-2
 # Expected: all four values = true
+
+# Verify the GitHub OIDC provider and role exist (requires elevated AWS access)
+aws iam list-open-id-connect-providers
+aws iam get-role --role-name snowflake-platform-tf-github-oidc
+```
+
+### OIDC (Phase 3.5)
+
+```sql
+-- In Snowflake, verify the OIDC service user exists with WORKLOAD_IDENTITY configured
+SHOW USERS LIKE 'GITHUB_OIDC_TERRAFORM_SVC';
+DESC USER GITHUB_OIDC_TERRAFORM_SVC;   -- has_workload_identity should be TRUE
+```
+
+```powershell
+# Confirm the latest terraform-apply.yml run authenticated via OIDC, not key-pair
+& $gh run list --repo radhasgrl/snowflake-platform-tf --workflow terraform-apply.yml --limit 3
+# Open a run and confirm the "Configure AWS credentials (OIDC)" and
+# "Fetch Snowflake OIDC token" steps both succeeded
 ```
 
 ### On GitHub
@@ -496,7 +561,9 @@ terraform plan -var-file="env/dev/dev.tfvars"
 | Decision | Choice | Reason |
 |---|---|---|
 | IaC tool | Terraform 1.16.0 | Client requirement; not OpenTofu |
-| Snowflake auth | RSA key pair JWT | No passwords; service account best practice |
+| Snowflake auth (apply workflow) | OIDC `WORKLOAD_IDENTITY` | Short-lived, per-run token — no stored secret; Snowflake's current recommended CI/CD pattern |
+| Snowflake auth (plan workflow) | RSA key pair JWT | Retained intentionally — Snowflake `SUBJECT` matching has no wildcard, so PR-triggered runs need a separate OIDC identity not yet built |
+| AWS auth (both workflows) | OIDC `AssumeRoleWithWebIdentity` | No stored AWS secret; matches AWS's recommended GitHub Actions pattern |
 | State storage | AWS S3 + `use_lockfile` | Secure, versioned, no DynamoDB required |
 | State region | `ap-southeast-2` (Sydney) | Aligns with client's AWS region |
 | Environment strategy | Single account, env-prefix naming | `DEV_`, `QA_`, `PROD_` prefixes on all objects |
@@ -522,5 +589,6 @@ Set-Location "C:\Users\radha.a.singh\OneDrive - Accenture\Documents\Snowflake_Pl
 
 | Phase | Scope | Status |
 |---|---|---|
+| Phase 3.5 | OIDC hardening — AWS (both workflows) + Snowflake (apply workflow) | 🟢 Live and verified; `terraform-plan.yml` Snowflake OIDC + secret cleanup still pending |
 | Phase 5 | RBAC — functional roles, grants, masking policies, row access policies | 🟡 Foundation implemented; masking/RLS require client rules |
 | Phase 6 | dbt integration + schema change migrations (schemachange/Flyway) | ⬜ Not started |

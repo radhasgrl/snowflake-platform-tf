@@ -145,37 +145,61 @@ DataOps extends authorization across environments, not just within one account:
 
 ---
 
-## What We Implemented in This POC
+## What We Implemented
 
-| Link in the Chain | Method Chosen | Why |
+**Status: OIDC is live for AWS (both workflows) and Snowflake (`terraform-apply.yml` only).**
+
+| Link in the Chain | Method in Use | Why |
 |---|---|---|
-| Pipeline → AWS | **IAM User + static Access Keys** | Fastest to stand up for a sandbox; proves the full pipeline end-to-end before investing in OIDC trust setup |
-| Pipeline → Snowflake | **RSA Key-Pair (`SNOWFLAKE_JWT`)**, dedicated `TERRAFORM_SVC` service user | No password/MFA blocking automation; Snowflake's documented pattern for Terraform-driven service accounts |
-| Secrets storage | **GitHub Repository Secrets** | Adequate for a private, single-team POC repository |
+| Pipeline → AWS (`terraform-plan.yml` + `terraform-apply.yml`) | **OIDC (`AssumeRoleWithWebIdentity`)** via `snowflake-platform-tf-github-oidc` role | No stored AWS secret; matches AWS's recommended pattern for GitHub Actions |
+| Pipeline → Snowflake (`terraform-apply.yml`) | **OIDC (`WORKLOAD_IDENTITY`)** via `GITHUB_OIDC_TERRAFORM_SVC` | No stored private key for the workflow that actually mutates infrastructure — the higher-value target |
+| Pipeline → Snowflake (`terraform-plan.yml`) | **RSA Key-Pair (`SNOWFLAKE_JWT`)**, `TERRAFORM_SVC` | Intentionally retained — Snowflake's `SUBJECT` match has no wildcard support (unlike AWS's `StringLike`), so the PR-triggered `sub` claim needs its own separate OIDC identity, not yet built |
+| Secrets storage | **GitHub Repository Secrets** | `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` are now unused but not yet deleted; `SNOWFLAKE_PRIVATE_KEY` still used by `terraform-plan.yml` |
 | Authorization inside Snowflake | **3 provider role aliases + 4 functional account roles, all grants declared in Terraform** | Least-privilege by function; every permission change is a reviewable diff |
 | Environment strategy | **Single Snowflake account, environment-prefixed objects, per-environment Terraform state** | Matches the client's actual Snowflake trial account topology; ready to extend to `qa`/`prod` without restructuring |
+
+### How the AWS trust was set up (without expanding pipeline permissions)
+
+The pipeline's own IAM identity (`terraform-platform-svc`) was deliberately never
+granted IAM write access. The OIDC provider and role were applied once by a
+human with elevated AWS access via CloudShell, using Terraform code committed
+to [aws-oidc-bootstrap/](aws-oidc-bootstrap) for review and reproducibility —
+mirroring how a platform/security team would own this in a real enterprise
+engagement (see [OIDC Migration Readiness](#oidc-migration-readiness) below).
+
+### A real subject-claim gotcha worth knowing
+
+GitHub's OIDC `sub` claim now includes stable account/repo IDs —
+`repo:owner@ownerId/repo@repoId:ref:refs/heads/main` — not the classic
+`repo:owner/repo:ref:...` format most tutorials still show. Both the AWS trust
+policy and the Snowflake `SUBJECT` had to be corrected to match the *actual*
+token, found by decoding a real token in a temporary debug step rather than
+guessing from documentation examples.
 
 ---
 
 ## What We Recommend for Production
 
-| Recommendation | Reason |
+| Recommendation | Status |
 |---|---|
-| **Migrate Pipeline → AWS to OIDC (`AssumeRoleWithWebIdentity`)** | Eliminates the long-lived AWS Access Key from GitHub Secrets |
-| **Migrate Pipeline → Snowflake to OIDC (`WORKLOAD_IDENTITY`)** | Eliminates the long-lived RSA private key from GitHub Secrets |
-| **Move to GitHub Environment secrets with required reviewers for `prod`** | Adds a human approval gate independent of authentication method |
-| **Replace placeholder masking/RLS policies with real client-confirmed rules** | Currently no-op; PII/row-level rules pending `Questionnaire.md` answers |
-| **Add Resource Monitors per warehouse** | Caps compute spend regardless of who/what is authorized to run queries |
-| **Add a `concurrency` group to `terraform-apply.yml` per environment** | Serializes applies so simultaneous merges queue cleanly instead of racing for the state lock |
-| **Enable branch protection + required reviewers on `main`** | Requires a paid GitHub plan (or a public repo) for a private repository — worth raising with the client if not already in place |
-| **Consider an external secrets manager if the client already runs one** | Avoids duplicating secret storage/rotation tooling the client has already standardized on |
+| ~~Migrate Pipeline → AWS to OIDC~~ | ✅ Done — both workflows |
+| ~~Migrate Pipeline → Snowflake to OIDC~~ | 🟡 Done for `terraform-apply.yml`; `terraform-plan.yml` still pending (needs its own read-only OIDC identity) |
+| **Remove now-unused `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` secrets** | ⬜ Pending — safe to remove, no longer read by either workflow |
+| **Build a genuinely read-only OIDC identity for `terraform-plan.yml`** | ⬜ Pending — matches Snowflake's own documented best practice (separate read-only identity for `plan`, read/write for `apply`) |
+| **Move to GitHub Environment secrets with required reviewers for `prod`** | ⬜ Pending — adds a human approval gate independent of authentication method |
+| **Replace placeholder masking/RLS policies with real client-confirmed rules** | ⬜ Pending — currently no-op; rules pending `Questionnaire.md` answers |
+| **Add Resource Monitors per warehouse** | ⬜ Pending — caps compute spend regardless of who/what is authorized to run queries |
+| **Add a `concurrency` group to `terraform-apply.yml` per environment** | ⬜ Pending — serializes applies so simultaneous merges queue cleanly instead of racing for the state lock |
+| **Enable branch protection + required reviewers on `main`** | ⬜ Blocked — requires a paid GitHub plan (or a public repo) for a private repository; worth raising with the client |
+| **Consider an external secrets manager if the client already runs one** | ⬜ Pending — avoids duplicating secret storage/rotation tooling the client has already standardized on |
 
 ---
 
 ## OIDC Migration Readiness
 
-Before starting the OIDC hardening phase (currently parked), gather the
-following — technical prerequisites first, then client-specific questions.
+**Status: AWS OIDC (both workflows) and Snowflake OIDC (`terraform-apply.yml`) are
+live.** The checklist below is kept as reference for extending OIDC to
+`terraform-plan.yml` and for any future per-environment identities.
 
 ### Technical Prerequisites
 
@@ -199,31 +223,29 @@ following — technical prerequisites first, then client-specific questions.
 | 5 | Who has `ACCOUNTADMIN` access in Snowflake to create the new `WORKLOAD_IDENTITY` service user? | This step cannot be done by Terraform — it's a one-time manual SQL step by a human with the right role |
 | 6 | Is there a change-freeze or approval process required before modifying how the pipeline authenticates to production systems? | OIDC migration touches the trust boundary of every future deployment — may need a formal change record |
 
-> **Note:** these are not yet part of `Questionnaire.md` — recommended to be
-> added there once Phase 3.5 is picked back up, since they are genuinely new
-> questions beyond what's already captured (Q17 and Q20 cover related but not
-> identical ground).
+> **Note:** questions 25–28 in `Questionnaire.md`'s GitHub/CI/CD table capture
+> this same ground for client discovery — already added there.
 
 ---
 
 ## Demo Talking Points
 
 1. **Show the trust chain diagram** — one pipeline run, two independent authentications (AWS + Snowflake), zero human credentials involved.
-2. **Show GitHub Secrets (names only, values hidden)** — explain these are exactly the secrets the "What We Recommend" table proposes eliminating next.
-3. **Show `providers.tf` and `roles.tf`** — explain that even the pipeline's own Snowflake access is split across 3 roles by operation type, mirroring least-privilege principles a security team will recognize immediately.
-4. **Trigger a live pipeline run** — merge a trivial change, show the PR's plan comment, then show the apply creating/updating the real Snowflake object.
-5. **Close with the Decision Matrix** — this is the "where we are vs. where we're going" slide.
+2. **Show GitHub Secrets (names only, values hidden)** — point out `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` are now unused (kept only pending final cleanup) — this is the "before OIDC" artifact, not the live path.
+3. **Show `providers.tf`** — the `use_workload_identity` conditional switching between key-pair and OIDC per-workflow, and `roles.tf` — the pipeline's own Snowflake access is split across 3 roles by operation type, mirroring least-privilege principles a security team will recognize immediately.
+4. **Trigger a live pipeline run** — merge a trivial change, show the PR's plan comment (key-pair auth), then show the apply run's "Configure AWS credentials (OIDC)" and "Fetch Snowflake OIDC token" steps succeeding with zero stored secrets used.
+5. **Close with the Decision Matrix** — this is the "what we already built vs. what's still planned" slide.
 
 ---
 
 ## Decision Matrix Summary
 
-| Criterion | Static Keys (used today) | OIDC / Workload Identity (recommended next) |
+| Criterion | Static Keys (`terraform-plan.yml` — Snowflake only) | OIDC / Workload Identity (`terraform-apply.yml` + all AWS auth) |
 |---|---|---|
-| Secret stored long-term? | Yes (GitHub Secrets) | No |
+| Secret stored long-term? | Yes (`SNOWFLAKE_PRIVATE_KEY` in GitHub Secrets) | No |
 | Requires manual rotation? | Yes | No — tokens expire automatically per run |
 | Blast radius if GitHub repo is compromised | High — attacker gets a reusable credential | Low — token is short-lived and scoped to repo/branch |
-| One-time setup effort | Low | Moderate (IAM OIDC provider + trust policy; Snowflake `WORKLOAD_IDENTITY`) |
-| Snowflake CLI version required | Any | ≥ 3.11 |
-| Fits this POC's delivery timeline | ✅ Yes | Planned as the next hardening phase |
-| Recommended before client production use | ❌ No | ✅ Yes |
+| One-time setup effort | Low (already done) | Moderate — already done for AWS + Snowflake apply; still pending for Snowflake plan |
+| Snowflake CLI version required | Any | ≥ 3.11 (satisfied — 3.25.0 in use) |
+| Status in this repo | ⚪ Still used by `terraform-plan.yml` | 🟢 Live — AWS (both workflows), Snowflake (`terraform-apply.yml`) |
+| Recommended before client production use | ❌ No | ✅ Yes — extend to `terraform-plan.yml` next |
