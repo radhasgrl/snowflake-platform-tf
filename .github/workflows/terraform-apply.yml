@@ -51,12 +51,6 @@ jobs:
         with:
           terraform_version: "1.16.0"
 
-      - name: Write Snowflake private key
-        run: |
-          mkdir -p ~/.ssh/snowflake
-          echo "${{ secrets.SNOWFLAKE_PRIVATE_KEY }}" > ~/.ssh/snowflake/tf_snow_key.p8
-          chmod 600 ~/.ssh/snowflake/tf_snow_key.p8
-
       - name: Fetch Snowflake OIDC token
         run: |
           TOKEN=$(curl -sSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
