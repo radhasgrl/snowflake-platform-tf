@@ -32,6 +32,8 @@ jobs:
     env:
       TF_VAR_snowflake_organization_name: xygpmhm
       TF_VAR_snowflake_account_name: gq04150
+      TF_VAR_use_workload_identity: "true"
+      TF_VAR_snowflake_oidc_user: "GITHUB_OIDC_TERRAFORM_PLAN_SVC"
       TARGET_ENV: ${{ github.event.inputs.environment || 'dev' }}
 
     steps:
@@ -51,11 +53,12 @@ jobs:
         with:
           terraform_version: "1.16.0"
 
-      - name: Write Snowflake private key
+      - name: Fetch Snowflake OIDC token
         run: |
-          mkdir -p ~/.ssh/snowflake
-          echo "${{ secrets.SNOWFLAKE_PRIVATE_KEY }}" > ~/.ssh/snowflake/tf_snow_key.p8
-          chmod 600 ~/.ssh/snowflake/tf_snow_key.p8
+          TOKEN=$(curl -sSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=snowflakecomputing.com" | jq -r '.value')
+          echo "::add-mask::$TOKEN"
+          echo "SNOWFLAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
 
       - name: Terraform Init
         run: terraform init -backend-config="env/${{ env.TARGET_ENV }}/backend.hcl"
