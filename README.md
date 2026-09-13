@@ -588,6 +588,6 @@ Set-Location "C:\Users\radha.a.singh\OneDrive - Accenture\Documents\Snowflake_Pl
 
 | Phase | Scope | Status |
 |---|---|---|
-| Phase 3.5 | OIDC hardening — AWS (both workflows) + Snowflake (apply workflow) | 🟢 Live and verified; `terraform-plan.yml` Snowflake OIDC + secret cleanup still pending |
+| Phase 3.5 | OIDC/WIF hardening — AWS (both workflows) + Snowflake (both workflows) | ✅ Complete — no key-pair/static-credential code path remains anywhere in the repo |
 | Phase 5 | RBAC — functional roles, grants, masking policies, row access policies | 🟡 Foundation implemented; masking/RLS require client rules |
 | Phase 6 | dbt integration + schema change migrations (schemachange/Flyway) | ⬜ Not started |
