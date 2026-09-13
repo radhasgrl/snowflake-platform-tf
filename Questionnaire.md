@@ -36,7 +36,7 @@ bootstrap/                    →  "One-time setup — creates the S3 state buck
 aws-oidc-bootstrap/            →  "One-time, human-applied — creates the AWS OIDC provider + IAM role"
 
 terraform.tf                  →  "Version pin + partial S3 backend — state is remote, encrypted, versioned"
-providers.tf                  →  "Three provider aliases, each switchable between key-pair and OIDC via one variable"
+providers.tf                  →  "Three provider aliases, all hardcoded to GitHub OIDC workload identity — no key-pair fallback anywhere in the repo"
 context.tf / locals.tf        →  "environment variable drives all naming — DEV_, QA_, PROD_"
 databases.tf / schemas.tf     →  "Core Snowflake objects — databases and schemas"
 warehouses.tf                 →  "Compute — environment-sized warehouses, auto-suspend by default"
@@ -72,7 +72,7 @@ Open the Snowflake UI and navigate to:
 |---|---|
 | **Data → Databases** | `DEV_LANDING_DB`, `DEV_ANALYTICS_DB`, `DEV_COMMON_DB` and their schemas |
 | **Admin → Warehouses** | 3 DEV warehouses, all SUSPENDED (correct — they start on demand) |
-| **Admin → Users** | `TERRAFORM_SVC` — *"Service account, no password, RSA key only"* |
+| **Admin → Users** | `GITHUB_OIDC_TERRAFORM_SVC` / `GITHUB_OIDC_TERRAFORM_PLAN_SVC` — *"Service accounts, no password, no key file — GitHub's OIDC token is the only credential"* |
 | **Admin → Roles** | `DEV_DATA_ENGINEER`, `DEV_DATA_ANALYST`, `DEV_DATA_CONSUMER`, `DEV_DBT_RUNNER` — *"Every grant is declared in Terraform, not clicked"* |
 | Masking/Row Access policies (SQL: `SHOW MASKING POLICIES`, `SHOW ROW ACCESS POLICIES`) | *"The security policy pattern is wired up — the real rules are pending your answers to the questionnaire below"* |
 
@@ -152,4 +152,4 @@ Capture answers before any architecture decisions are made.
 | **RBAC is implemented** | Phase 5 roles, grants, and the masking/row-access policy pattern are live and Terraform-managed — real PII/RLS rules are the only piece pending your answers above. |
 | **Environment promotion is code** | `QA_` and `PROD_` environments are created by changing one variable — not by repeating manual steps across environments. |
 | **State is the safety net** | Terraform knows exactly what exists in Snowflake. Any manual change made outside Terraform is detected on the next `plan`. |
-| **No credentials in code** | Private keys, AWS access keys, and account identifiers are all in GitHub Secrets — never in the repository. |
+| **No credentials in code** | No private keys, no AWS access keys — both AWS and Snowflake authenticate the pipeline via short-lived GitHub OIDC tokens. Only non-secret account identifiers live in GitHub Secrets. |

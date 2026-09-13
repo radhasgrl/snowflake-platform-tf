@@ -319,14 +319,18 @@ static secrets with short-lived, per-run OIDC tokens.
 | AWS IAM OIDC provider | Trusts `token.actions.githubusercontent.com`, created via [aws-oidc-bootstrap/](aws-oidc-bootstrap) (human-applied, not by the pipeline's own IAM identity) |
 | AWS IAM role | `snowflake-platform-tf-github-oidc` — trust policy scoped to this repo's actual `sub` claim format |
 | Snowflake service user | `GITHUB_OIDC_TERRAFORM_SVC`, created via [oidc_service_user.tf](oidc_service_user.tf) — `WORKLOAD_IDENTITY` trust scoped to the push-to-main subject claim |
-| Provider auth switch | `providers.tf` — all 3 provider aliases gated by `var.use_workload_identity`; `terraform-apply.yml` sets it `true`, `terraform-plan.yml` leaves it `false` (unchanged, still key-pair) |
+| Snowflake service user (plan) | `GITHUB_OIDC_TERRAFORM_PLAN_SVC`, created via [oidc_service_user.tf](oidc_service_user.tf) — `WORKLOAD_IDENTITY` trust scoped to the exact pull_request subject claim (confirmed empirically, distinct from the push-to-main claim) |
+| Provider auth | `providers.tf` — all 3 provider aliases hardcoded to `WORKLOAD_IDENTITY`/`OIDC`; the only per-workflow knob is `var.snowflake_oidc_user` (apply vs plan identity). No key-pair fallback code path remains anywhere in the repo. |
 
 ### Status by workflow
 
 | Workflow | AWS auth | Snowflake auth |
 |---|---|---|
-| `terraform-apply.yml` | ✅ OIDC (`AssumeRoleWithWebIdentity`) | ✅ OIDC (`WORKLOAD_IDENTITY`) |
-| `terraform-plan.yml` | ✅ OIDC (`AssumeRoleWithWebIdentity`) | ⚪ Key-pair (`TERRAFORM_SVC`) — intentionally scoped out; see [Authentication-Authorization-Options.md](Authentication-Authorization-Options.md) for why |
+| `terraform-apply.yml` | ✅ OIDC (`AssumeRoleWithWebIdentity`) | ✅ OIDC (`WORKLOAD_IDENTITY`, `GITHUB_OIDC_TERRAFORM_SVC`) |
+| `terraform-plan.yml` | ✅ OIDC (`AssumeRoleWithWebIdentity`) | ✅ OIDC (`WORKLOAD_IDENTITY`, `GITHUB_OIDC_TERRAFORM_PLAN_SVC`) |
+
+Both pipelines are now fully secretless for both AWS and Snowflake — no
+long-lived credential of any kind is stored or read by either workflow.
 
 ### Key finding during implementation
 
@@ -338,17 +342,12 @@ updated to match the actual claim (verified via a temporary debug step that
 decoded the real token).
 
 ### Mandatory notes
-- Snowflake's `SUBJECT` match is an **exact string**, unlike AWS IAM's `StringLike` wildcard — this is why `terraform-plan.yml` (a different `sub` claim, PR-triggered) needs its own separate Snowflake OIDC identity, not yet built.
+- Snowflake's `SUBJECT` match is an **exact string**, unlike AWS IAM's `StringLike` wildcard — this is why `terraform-plan.yml` (a different `sub` claim, PR-triggered) needed its own separate Snowflake OIDC identity (`GITHUB_OIDC_TERRAFORM_PLAN_SVC`), confirmed via a temporary debug step and now built and live.
 - The AWS OIDC provider + role were applied by a human with elevated AWS access via CloudShell, never by the pipeline's own narrowly-scoped IAM user — see [Authentication-Authorization-Options.md](Authentication-Authorization-Options.md) for the reasoning.
 - `.gitattributes` was added to force LF line endings on `.tf`/`.tfvars`/`.hcl` files — without it, a Windows checkout of a Linux-CI-applied `snowflake_execute` resource could show a false diff and attempt to needlessly drop/recreate a resource.
-- `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` GitHub secrets are no longer read by either workflow but have not yet been deleted (pending final verification).
-
----
-
-### Mandatory notes
-- `workflow_dispatch:` is added to both workflows with an `environment` choice input (`dev`/`qa`/`prod`), so any environment can be planned or applied manually from the GitHub Actions UI.
-- On a plain push to `main`, both workflows default to the `dev` environment.
-- The private key is written to disk inside the runner at the exact path expected by [variables.tf](variables.tf) (`~/.ssh/snowflake/tf_snow_key.p8`).
+- `SNOWFLAKE_PRIVATE_KEY` is no longer read by any workflow (the plan identity now also uses OIDC); `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` are likewise unused. All three remain as inert GitHub Secrets pending a deliberate decision to delete them.
+- The `use_workload_identity` toggle and `TERRAFORM_SVC` key-pair fallback were removed entirely from `providers.tf`/`variables.tf` once both workflows were confirmed on OIDC — there is no longer a non-OIDC code path in this repo.
+- `workflow_dispatch:` is available on both workflows with an `environment` choice input (`dev`/`qa`/`prod`), so any environment can be planned or applied manually from the GitHub Actions UI. On a plain push to `main`, both workflows default to the `dev` environment.
 
 ---
 
