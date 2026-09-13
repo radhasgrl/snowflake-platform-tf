@@ -31,7 +31,6 @@ jobs:
     env:
       TF_VAR_snowflake_organization_name: xygpmhm
       TF_VAR_snowflake_account_name: gq04150
-      TF_VAR_use_workload_identity: "true"
       TARGET_ENV: ${{ github.event.inputs.environment || 'dev' }}
 
     steps:
