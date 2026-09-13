@@ -42,3 +42,55 @@ resource "snowflake_grant_account_role" "github_oidc_securityadmin" {
 
   depends_on = [snowflake_execute.github_oidc_service_user]
 }
+
+# Second service user for terraform-plan.yml (pull_request-triggered runs).
+# Snowflake's WORKLOAD_IDENTITY subject match is exact (no wildcards), and
+# GitHub issues a different sub claim for pull_request vs push events, so
+# plan cannot reuse the apply identity above — confirmed empirically via a
+# temporary debug step against a real PR run.
+# NOTE: privilege scope is intentionally the same as the apply user for now
+# (SYSADMIN/USERADMIN/SECURITYADMIN) — "read-only" is enforced by this
+# identity only ever being used by `terraform plan` (which never issues
+# mutating SQL) and by the exact subject-claim scoping to pull_request runs
+# only. A narrower, privilege-restricted custom role is a possible future
+# hardening step but isn't implemented here.
+resource "snowflake_execute" "github_oidc_plan_service_user" {
+  provider = snowflake.useradmin
+
+  execute = <<-SQL
+    CREATE USER IF NOT EXISTS GITHUB_OIDC_TERRAFORM_PLAN_SVC
+      TYPE = SERVICE
+      COMMENT = 'GitHub Actions OIDC identity for terraform-plan.yml (pull_request)'
+      WORKLOAD_IDENTITY = (
+        TYPE = OIDC
+        ISSUER = 'https://token.actions.githubusercontent.com'
+        SUBJECT = 'repo:radhasgrl@43290275/snowflake-platform-tf@1351137236:pull_request'
+      )
+  SQL
+
+  revert = "DROP USER IF EXISTS GITHUB_OIDC_TERRAFORM_PLAN_SVC"
+}
+
+resource "snowflake_grant_account_role" "github_oidc_plan_sysadmin" {
+  provider  = snowflake.useradmin
+  role_name = "SYSADMIN"
+  user_name = "GITHUB_OIDC_TERRAFORM_PLAN_SVC"
+
+  depends_on = [snowflake_execute.github_oidc_plan_service_user]
+}
+
+resource "snowflake_grant_account_role" "github_oidc_plan_useradmin" {
+  provider  = snowflake.useradmin
+  role_name = "USERADMIN"
+  user_name = "GITHUB_OIDC_TERRAFORM_PLAN_SVC"
+
+  depends_on = [snowflake_execute.github_oidc_plan_service_user]
+}
+
+resource "snowflake_grant_account_role" "github_oidc_plan_securityadmin" {
+  provider  = snowflake.useradmin
+  role_name = "SECURITYADMIN"
+  user_name = "GITHUB_OIDC_TERRAFORM_PLAN_SVC"
+
+  depends_on = [snowflake_execute.github_oidc_plan_service_user]
+}
