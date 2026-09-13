@@ -53,7 +53,7 @@ Every option below answers one of these three links in the chain.
 
 | Method | How it works | Fit for CI/CD | Trade-offs |
 |---|---|---|---|
-| **RSA Key-Pair (`SNOWFLAKE_JWT`)** | A dedicated `TYPE = SERVICE` user has a public key registered; the pipeline holds the private key and signs a JWT per connection | ✅ Standard pattern for Terraform-driven pipelines today | Private key is a long-lived secret — must be stored in GitHub Secrets and rotated manually |
+| **RSA Key-Pair (`SNOWFLAKE_JWT`)** | A dedicated `TYPE = SERVICE` user has a public key registered; the pipeline holds the private key and signs a JWT per connection | ⚪ Superseded in this repo — was the original pattern, fully replaced by OIDC in both workflows | Private key is a long-lived secret — must be stored in GitHub Secrets and rotated manually |
 | **Workload Identity Federation (OIDC)** | GitHub issues a short-lived signed token per run; the Snowflake service user has `WORKLOAD_IDENTITY` configured to trust GitHub's OIDC issuer + a specific repo/branch subject claim | ✅ Snowflake's current recommended approach for CI/CD | Requires Snowflake CLI ≥ 3.11; one-time setup of `WORKLOAD_IDENTITY` on the service user |
 | **Programmatic Access Token (PAT)** | Snowflake issues a scoped, expiring bearer token tied to a user | ⚠️ Usable, but token still needs to be stored as a secret and manually refreshed before expiry | Simpler than key-pair to generate, but doesn't remove the "stored secret" problem |
 | **Username + Password** | Static credential | ❌ Not viable — no MFA path for unattended automation, and passwords are the weakest secret class | Avoid entirely for pipelines |
@@ -147,14 +147,14 @@ DataOps extends authorization across environments, not just within one account:
 
 ## What We Implemented
 
-**Status: OIDC is live for AWS (both workflows) and Snowflake (`terraform-apply.yml` only).**
+**Status: OIDC is live for AWS (both workflows) and Snowflake (both workflows). No key-pair or static credential code path remains in the repository.**
 
 | Link in the Chain | Method in Use | Why |
 |---|---|---|
 | Pipeline → AWS (`terraform-plan.yml` + `terraform-apply.yml`) | **OIDC (`AssumeRoleWithWebIdentity`)** via `snowflake-platform-tf-github-oidc` role | No stored AWS secret; matches AWS's recommended pattern for GitHub Actions |
-| Pipeline → Snowflake (`terraform-apply.yml`) | **OIDC (`WORKLOAD_IDENTITY`)** via `GITHUB_OIDC_TERRAFORM_SVC` | No stored private key for the workflow that actually mutates infrastructure — the higher-value target |
-| Pipeline → Snowflake (`terraform-plan.yml`) | **RSA Key-Pair (`SNOWFLAKE_JWT`)**, `TERRAFORM_SVC` | Intentionally retained — Snowflake's `SUBJECT` match has no wildcard support (unlike AWS's `StringLike`), so the PR-triggered `sub` claim needs its own separate OIDC identity, not yet built |
-| Secrets storage | **GitHub Repository Secrets** | `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` are now unused but not yet deleted; `SNOWFLAKE_PRIVATE_KEY` still used by `terraform-plan.yml` |
+| Pipeline → Snowflake (`terraform-apply.yml`) | **OIDC (`WORKLOAD_IDENTITY`)** via `GITHUB_OIDC_TERRAFORM_SVC` | No stored private key for the workflow that mutates infrastructure |
+| Pipeline → Snowflake (`terraform-plan.yml`) | **OIDC (`WORKLOAD_IDENTITY`)** via `GITHUB_OIDC_TERRAFORM_PLAN_SVC` | Separate identity required because Snowflake's `SUBJECT` match is exact (no wildcard support like AWS's `StringLike`) — GitHub issues a distinct `sub` claim for `pull_request` vs `push` events, confirmed empirically |
+| Secrets storage | **GitHub Repository Secrets** | `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`SNOWFLAKE_PRIVATE_KEY` are all now unused by every workflow; kept as inert secrets pending a deliberate decision to delete them |
 | Authorization inside Snowflake | **3 provider role aliases + 4 functional account roles, all grants declared in Terraform** | Least-privilege by function; every permission change is a reviewable diff |
 | Environment strategy | **Single Snowflake account, environment-prefixed objects, per-environment Terraform state** | Matches the client's actual Snowflake trial account topology; ready to extend to `qa`/`prod` without restructuring |
 
@@ -231,18 +231,18 @@ live.** The checklist below is kept as reference for extending OIDC to
 ## Demo Talking Points
 
 1. **Show the trust chain diagram** — one pipeline run, two independent authentications (AWS + Snowflake), zero human credentials involved.
-2. **Show GitHub Secrets (names only, values hidden)** — point out `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` are now unused (kept only pending final cleanup) — this is the "before OIDC" artifact, not the live path.
-3. **Show `providers.tf`** — the `use_workload_identity` conditional switching between key-pair and OIDC per-workflow, and `roles.tf` — the pipeline's own Snowflake access is split across 3 roles by operation type, mirroring least-privilege principles a security team will recognize immediately.
-4. **Trigger a live pipeline run** — merge a trivial change, show the PR's plan comment (key-pair auth), then show the apply run's "Configure AWS credentials (OIDC)" and "Fetch Snowflake OIDC token" steps succeeding with zero stored secrets used.
-5. **Close with the Decision Matrix** — this is the "what we already built vs. what's still planned" slide.
+2. **Show GitHub Secrets (names only, values hidden)** — point out `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`SNOWFLAKE_PRIVATE_KEY` are all now unused (kept only pending a deliberate cleanup decision) — these are "before OIDC" artifacts, not the live path.
+3. **Show `providers.tf`** — authentication is hardcoded to `WORKLOAD_IDENTITY`/`OIDC` for all 3 role aliases; the only per-workflow knob is `var.snowflake_oidc_user`, selecting the apply vs plan identity — and `roles.tf`, where the pipeline's own Snowflake access is split across 3 roles by operation type, mirroring least-privilege principles a security team will recognize immediately.
+4. **Trigger a live pipeline run** — open a PR, show the plan run's "Fetch Snowflake OIDC token" step succeeding (no private key involved), then merge and show the apply run doing the same — zero stored secrets used in either path.
+5. **Close with the Decision Matrix** — this is the "what we built vs. what we deliberately avoided" slide.
 
 ---
 
 ## Decision Matrix Summary
 
-| Criterion | Static Keys (`terraform-plan.yml` — Snowflake only) | OIDC / Workload Identity (`terraform-apply.yml` + all AWS auth) |
+| Criterion | Static Keys (legacy, fully removed) | OIDC / Workload Identity (both workflows, both AWS + Snowflake) |
 |---|---|---|
-| Secret stored long-term? | Yes (`SNOWFLAKE_PRIVATE_KEY` in GitHub Secrets) | No |
+| Secret stored long-term? | Was: Yes (`SNOWFLAKE_PRIVATE_KEY` in GitHub Secrets) | No |
 | Requires manual rotation? | Yes | No — tokens expire automatically per run |
 | Blast radius if GitHub repo is compromised | High — attacker gets a reusable credential | Low — token is short-lived and scoped to repo/branch |
 | One-time setup effort | Low (already done) | Moderate — already done for AWS + Snowflake apply; still pending for Snowflake plan |
