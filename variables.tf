@@ -32,3 +32,9 @@ variable "use_workload_identity" {
   type        = bool
   default     = false
 }
+
+variable "snowflake_oidc_user" {
+  description = "Snowflake service user to authenticate as when use_workload_identity is true. Differs per workflow: GITHUB_OIDC_TERRAFORM_SVC for apply (push to main), GITHUB_OIDC_TERRAFORM_PLAN_SVC for plan (pull_request) — Snowflake's WORKLOAD_IDENTITY subject match is exact, so each trigger needs its own service user."
+  type        = string
+  default     = "GITHUB_OIDC_TERRAFORM_SVC"
+}
