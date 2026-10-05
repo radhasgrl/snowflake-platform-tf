@@ -4,12 +4,11 @@
 # usernames before these entries actually route PR reviews.
 
 # Platform team owns the Terraform account/platform layer and workflow orchestration
-*.tf                     @platform-team
-/manifest.yml            @platform-team
-/.github/                @platform-team
+/terraform/               @platform-team
+/.github/                 @platform-team
 
 # Data engineering owns the DCM-managed database object layer
-/sources/                @data-engineering-team
+/dcm/                      @data-engineering-team
 
 # Everyone reviews shared documentation
 *.md                      @platform-team @data-engineering-team

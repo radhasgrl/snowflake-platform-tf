@@ -1,11 +1,13 @@
 # Snowflake DataOps Platform — Terraform + DCM (Repo 1 of 3)
 
 A fully automated Snowflake DataOps platform managed through **Terraform** (account/platform
-layer) and **Snowflake DCM** (database object layer), with CI/CD via GitHub Actions and
-Terraform remote state in AWS S3. This is Repo 1 (`snowflake-platform-tf`) of a 3-repo client
-demo; see `MDP_Platform_Engineering_CICD_IaC_Repo_Architecture_v0.1.md` for the full repo
-structure (Repo 2: `data-ingestion-raw` — Snowpipe ingestion into RAW; Repo 3:
-`customer-domain-dbt` — dbt transformations for the Customer domain).
+layer, folder: `terraform/`) and **Snowflake DCM** (database object layer, folder: `dcm/`),
+with CI/CD via GitHub Actions and Terraform remote state in AWS S3. This is Repo 1
+(`snowflake-platform-tf`) of a 3-repo client demo — Repo 2: `data-ingestion-raw` (Snowpipe
+ingestion into RAW); Repo 3: `customer-domain-dbt` (dbt transformations for the Customer
+domain). **This repo is the sole provisioner of resources for all 3 repos** — Repos 2 and 3
+contain only code (SQL / dbt models) that runs against identities and objects this repo
+creates; see [How Repo 1 Feeds Repos 2 & 3](#how-repo-1-feeds-repos-2--3) below.
 
 ---
 
@@ -13,45 +15,46 @@ structure (Repo 2: `data-ingestion-raw` — Snowpipe ingestion into RAW; Repo 3:
 
 1. [Architecture Overview](#architecture-overview)
 2. [Folder Structure](#folder-structure)
-3. [Prerequisites](#prerequisites)
-4. [One-Time Bootstrap (run once, by hand)](#one-time-bootstrap-run-once-by-hand)
-5. [CI/CD Pipeline (ongoing, automated)](#cicd-pipeline-ongoing-automated)
-6. [History — Terraform → DCM Cutover](#history--terraform--dcm-cutover)
-7. [Verification Guide](#verification-guide)
-8. [Key Decisions](#key-decisions)
-9. [Known Limitations (demo scope)](#known-limitations-demo-scope)
-10. [What's Next](#whats-next)
+3. [How Repo 1 Feeds Repos 2 & 3](#how-repo-1-feeds-repos-2--3)
+4. [Prerequisites](#prerequisites)
+5. [One-Time Bootstrap (run once, by hand)](#one-time-bootstrap-run-once-by-hand)
+6. [CI/CD Pipeline (ongoing, automated)](#cicd-pipeline-ongoing-automated)
+7. [History — Terraform → DCM Cutover](#history--terraform--dcm-cutover)
+8. [Verification Guide](#verification-guide)
+9. [Key Decisions](#key-decisions)
+10. [Known Limitations (demo scope)](#known-limitations-demo-scope)
+11. [What's Next](#whats-next)
 
 ---
 
 ## Architecture Overview
 
-This repo is **Repo 1 ("infra-snowflake") of a 3-repo platform**, pairing Terraform with
-Snowflake's native DCM (Database Change Management), per the ownership split agreed with
-the client in `MDP_Platform_Engineering_CICD_IaC_Repo_Architecture_v0.1.md` §2.2:
+This repo is **Repo 1 of a 3-repo platform**, pairing Terraform with Snowflake's native DCM
+(Database Change Management):
 
-- **Terraform** owns the account/platform layer for the whole 3-repo platform, not just
-  this repo: GitHub OIDC service identities for all 4 engines (`GITHUB_DEV_TERRAFORM_SVC`,
-  `GITHUB_DEV_DCM_SVC`, `GITHUB_DEV_DBT_SVC` for Repo 3, `GITHUB_DEV_INGEST_SVC` for Repo 2),
-  plus the AWS infrastructure Repo 2's ingestion pipeline runs against (S3 bucket + 2 IAM
-  roles — `ingestion_aws_infra.tf`). Repo 2 itself contains ingestion **code** only, no
-  infrastructure.
-- **DCM** owns the database object layer: databases, schemas, warehouses, tiered RBAC roles,
-  DB grants, and placeholder masking/row-access policies (`sources/definitions/*.sql`).
+- **Terraform** (`terraform/`) owns the account/platform layer for the whole 3-repo
+  platform, not just this repo: GitHub OIDC service identities for all 4 engines
+  (`GITHUB_DEV_TERRAFORM_SVC`, `GITHUB_DEV_DCM_SVC`, `GITHUB_DEV_DBT_SVC` for Repo 3,
+  `GITHUB_DEV_INGEST_SVC` for Repo 2), plus the AWS infrastructure Repo 2's ingestion
+  pipeline runs against (S3 bucket + 2 IAM roles — `terraform/ingestion_aws_infra.tf`).
+  Repo 2 itself contains ingestion **code** only, no infrastructure.
+- **DCM** (`dcm/`) owns the database object layer: databases, schemas, warehouses, tiered
+  RBAC roles, DB grants, and placeholder masking/row-access policies
+  (`dcm/sources/definitions/*.sql`).
 
 Identities are scoped to **GitHub Environments** (`DEV-Terraform`, `DEV-DCM`, and each
 downstream repo's own environment — `DEV-Ingest` in Repo 2, `DEV-dbt` in Repo 3), not to a
-branch or event — see the OIDC rationale comment at the top of `oidc_service_user.tf`. This
-decouples environment from branch so a future trunk-based TEST/UAT/PROD promotion flow
-doesn't require re-architecting the identity model.
+branch or event — see the OIDC rationale comment at the top of
+`terraform/oidc_service_user.tf`. This decouples environment from branch so a future
+trunk-based TEST/UAT/PROD promotion flow doesn't require re-architecting the identity model.
 
 ```
 Developer / PR
      │
      ▼
 GitHub Actions (CI/CD) — single pipeline, two engines, sequential jobs
- ├── terraform-plan.yml   (PR)    → plan job → dcm-plan job (needs: plan)
- └── terraform-apply.yml  (push)  → apply job → dcm-deploy job (needs: apply)
+ ├── terraform-plan.yml   (PR)    → plan job (terraform/) → dcm-plan job (dcm/, needs: plan)
+ └── terraform-apply.yml  (push)  → apply job (terraform/) → dcm-deploy job (dcm/, needs: apply)
           │
           ├── Terraform: fetches state from S3 (ap-southeast-2), authenticates to
           │   Snowflake via GitHub OIDC / WORKLOAD_IDENTITY (no stored keys) and to AWS via
@@ -66,8 +69,8 @@ AWS (ap-southeast-2 / Sydney)
  ├── S3 bucket: snowflake-platform-tf-state-525218385225
  │    └── workload/dev/terraform.tfstate   ← encrypted, versioned (Terraform's state only — DCM has no separate state file, it diffs its SQL definitions against live Snowflake metadata)
  └── S3 bucket: data-ingestion-raw-525218385225 + 2 IAM roles   ← Repo 2's ingestion infra,
-      provisioned here (ingestion_aws_infra.tf), used by Repo 2's pipeline and Snowflake's
-      storage integration
+      provisioned here (terraform/ingestion_aws_infra.tf), used by Repo 2's pipeline and
+      Snowflake's storage integration
 
 Snowflake Account: xygpmhm-gq04150
  ├── GITHUB_DEV_TERRAFORM_SVC — Terraform identity (OIDC, GitHub Environment DEV-Terraform)
@@ -77,75 +80,104 @@ Snowflake Account: xygpmhm-gq04150
  └── DCM-managed objects: DEV_CUSTOMER_DB (Customer domain — RAW/STAGING/MARTS/SHARED
      schemas), shared warehouses, tiered RBAC roles (DEV_CUSTOMER_DATA_ENGINEER_PRSN,
      DEV_CUSTOMER_INGEST_FNCRL, DEV_CUSTOMER_DB.RAW_SCRL_R/_W, DEV_INGEST_WH_WHRL_U/_M/_O,
-     etc. — see sources/definitions/roles.sql, database_roles.sql, grants.sql), grants, and
-     placeholder masking/row-access policies
+     etc. — see dcm/sources/definitions/roles.sql, database_roles.sql, grants.sql), grants,
+     and placeholder masking/row-access policies
 ```
 
 ---
 
 ## Folder Structure
 
-This repo contains **3 separate Terraform root modules** (each with its own state, its own
-`variables.tf`/`outputs.tf`), plus the DCM project. This isn't duplication — each one solves
-a distinct, one-time bootstrapping problem that has to exist before the next can run:
+This repo is split into exactly 2 top-level folders by *which engine owns the resource* —
+`terraform/` for everything Terraform provisions, `dcm/` for everything DCM provisions.
+Nothing Terraform-related lives outside `terraform/`; nothing DCM-related lives outside
+`dcm/`.
 
 ```
 .
-├── bootstrap/                        # One-time, human-applied — never touched by CI
-│   ├── state-backend/                # Root module #1: creates the S3 bucket this repo's
-│   │   │                             #   OWN remote backend needs to exist before it can
-│   │   │                             #   be configured. Must run before anything else.
-│   │   ├── main.tf, variables.tf, outputs.tf, versions.tf
-│   │   └── terraform.tfstate         # LOCAL state (there's no backend yet to point to)
-│   └── oidc-identity/                # Root module #2: creates the GitHub OIDC trust + CI
-│       │                             #   IAM role that CI itself needs to authenticate to
-│       │                             #   AWS. Can't bootstrap a pipeline's own permissions
-│       │                             #   using that same pipeline.
-│       ├── main.tf, variables.tf, outputs.tf, versions.tf
-│       └── terraform.tfstate         # LOCAL state, same reason as above
+├── terraform/
+│   ├── bootstrap/                    # One-time, human-applied — never touched by CI
+│   │   ├── state-backend/            # Root module #1: creates the S3 bucket this repo's
+│   │   │   │                         #   OWN remote backend needs to exist before it can
+│   │   │   │                         #   be configured. Must run before anything else.
+│   │   │   └── main.tf, variables.tf, outputs.tf, versions.tf, terraform.tfstate (LOCAL)
+│   │   └── oidc-identity/            # Root module #2: creates the GitHub OIDC trust + CI
+│   │       │                         #   IAM role that CI itself needs to authenticate to
+│   │       │                         #   AWS. Can't bootstrap a pipeline's own permissions
+│   │       │                         #   using that same pipeline.
+│   │       └── main.tf, variables.tf, outputs.tf, versions.tf, terraform.tfstate (LOCAL)
+│   │
+│   ├── env/
+│   │   ├── dev/ (backend.hcl, dev.tfvars)
+│   │   ├── qa/                       # scaffolded, not yet wired into any pipeline
+│   │   └── prod/                     # scaffolded, not yet wired into any pipeline
+│   │
+│   ├── oidc_service_user.tf          # GitHub OIDC identities (Terraform, DCM, dbt, ingestion engines)
+│   ├── dcm_home.tf                   # DEV_ADMIN_DB.DCM, the DCM project's own home
+│   ├── ingestion_aws_infra.tf        # Repo 2's S3 bucket + IAM roles (provisioned here, not in Repo 2)
+│   ├── removed.tf                    # one-time `removed` blocks for the DCM cutover
+│   ├── context.tf, providers.tf, terraform.tf, variables.tf, outputs.tf
+│   │                                 # Root module #3: the ONGOING, CI-managed Terraform —
+│   │                                 #   deployed by terraform-apply.yml on every merge
+│   └── .terraform-version            # Pins Terraform to 1.16.0
+│
+├── dcm/
+│   ├── manifest.yml                  # DCM project manifest (targets, account identifier)
+│   └── sources/
+│       └── definitions/              # DCM SQL definitions — database object layer
+│           ├── databases.sql
+│           ├── schemas.sql
+│           ├── warehouses.sql
+│           ├── roles.sql             # Tier 1 persona, Tier 2 functional, Tier 4 warehouse roles
+│           ├── database_roles.sql    # Tier 3 database roles (schema-scoped read/write)
+│           ├── grants.sql            # wires Tier 3/4 -> Tier 2 -> Tier 1
+│           ├── masking.sql
+│           ├── row_access.sql
+│           └── tables.sql            # RAW.CUSTOMERS — loaded by Repo 2, read by Repo 3
 │
 ├── .github/
-│   ├── CODEOWNERS                   # *.tf -> platform; /sources/ -> data engineering
-│   ├── pull_request_template.md     # Layer(s) Affected + validation checklist
+│   ├── CODEOWNERS                    # /terraform/ -> platform; /dcm/ -> data engineering
+│   ├── pull_request_template.md      # Layer(s) Affected + validation checklist
 │   └── workflows/
-│       ├── terraform-plan.yml      # plan job (Terraform) + dcm-plan job (DCM, parallel), on Pull Requests
-│       └── terraform-apply.yml     # apply job (Terraform) + dcm-deploy job (DCM, needs: apply), on merge to main
-│
-├── manifest.yml                      # DCM project manifest (targets, account identifier)
-├── sources/
-│   └── definitions/                 # DCM SQL definitions — database object layer
-│       ├── databases.sql
-│       ├── schemas.sql
-│       ├── warehouses.sql
-│       ├── roles.sql                # Tier 1 persona, Tier 2 functional, Tier 4 warehouse roles
-│       ├── database_roles.sql       # Tier 3 database roles (schema-scoped read/write)
-│       ├── grants.sql               # wires Tier 3/4 -> Tier 2 -> Tier 1
-│       ├── masking.sql
-│       ├── row_access.sql
-│       └── tables.sql               # RAW.CUSTOMERS — loaded by Repo 2 (data-ingestion-raw), read by Repo 3 (customer-domain-dbt)
-│
-├── oidc_service_user.tf             # Root module #3 (below) — GitHub OIDC identities (Terraform, DCM, dbt, ingestion engines)
-├── dcm_home.tf                      #   — DEV_ADMIN_DB.DCM, the DCM project's own home
-├── ingestion_aws_infra.tf           #   — Repo 2's S3 bucket + IAM roles (provisioned here, not in Repo 2)
-├── removed.tf                       #   — one-time `removed` blocks for the DCM cutover
-├── context.tf, providers.tf, terraform.tf, variables.tf, outputs.tf
-│                                     # Root module #3: the ONGOING, CI-managed Terraform —
-│                                     #   everything above this line changes repeatedly and
-│                                     #   is deployed by terraform-apply.yml on every merge
-├── env/
-│   ├── dev/ (backend.hcl, dev.tfvars)
-│   ├── qa/                          # scaffolded, not yet wired into any pipeline
-│   └── prod/                        # scaffolded, not yet wired into any pipeline
+│       ├── terraform-plan.yml        # plan job (terraform/) + dcm-plan job (dcm/, parallel), on Pull Requests
+│       └── terraform-apply.yml       # apply job (terraform/) + dcm-deploy job (dcm/, needs: apply), on merge to main
 │
 ├── .gitignore
-├── .terraform-version              # Pins Terraform to 1.16.0
 └── README.md
 ```
 
-**Quick way to tell the 3 roots apart**: `bootstrap/state-backend/` and `bootstrap/oidc-identity/`
-are each applied **once, by hand**, with local state, and never run by CI. Everything at repo
-root (`variables.tf`, `outputs.tf`, `*.tf`, `manifest.yml`, `sources/`) is the **ongoing** root
-module — remote (S3) state, deployed automatically by CI on every merge to `main`.
+**Quick way to tell the 3 Terraform roots apart**: `terraform/bootstrap/state-backend/` and
+`terraform/bootstrap/oidc-identity/` are each applied **once, by hand**, with local state,
+and never run by CI. Everything else in `terraform/` is the **ongoing** root module —
+remote (S3) state, deployed automatically by CI on every merge to `main`.
+
+---
+
+## How Repo 1 Feeds Repos 2 & 3
+
+Repo 1 is the **only** repo of the 3 that provisions resources. Repos 2 and 3 never create
+their own Snowflake users, roles, warehouses, or AWS infrastructure — they authenticate as
+an identity Repo 1 already created, scoped to exactly the role Repo 1 granted, and run only
+application-level code (SQL / dbt models) against objects Repo 1 already defined. If Repo 1
+hasn't run yet, Repo 2/3's pipelines fail cleanly (user or role doesn't exist) rather than
+silently drifting.
+
+| What Repo 1 provisions (via `terraform/` + `dcm/`) | Consumed by |
+|---|---|
+| `GITHUB_DEV_INGEST_SVC` identity + `DEV_CUSTOMER_INGEST_SERVICE_PRSN` role | Repo 2 (`data-ingestion-raw`) authenticates as this identity to deploy/run its Snowpipe SQL |
+| `GITHUB_DEV_DBT_SVC` identity + `DEV_CUSTOMER_DBT_SERVICE_PRSN` role | Repo 3 (`customer-domain-dbt`) authenticates as this identity to run `dbt build` |
+| `DEV_CUSTOMER_DB.RAW.CUSTOMERS` table (`dcm/sources/definitions/tables.sql`) | Repo 2 loads into it; Repo 3 reads it as a dbt source |
+| `DEV_CUSTOMER_DB.STAGING` / `.MARTS` schemas, `DEV_TRANSFORM_WH` warehouse | Repo 3 builds its dbt models into these |
+| S3 bucket `data-ingestion-raw-525218385225` + 2 IAM roles (`terraform/ingestion_aws_infra.tf`) | Repo 2's CI assumes one role to manage the bucket; Snowflake's storage integration assumes the other to read it |
+
+**What Repo 2/3 developers can do independently** (no Repo 1 PR needed): add a new
+pipe/stage reading from the same bucket into the same existing table (Repo 2); add a new
+dbt model reading existing sources into the existing `STAGING`/`MARTS` schemas (Repo 3).
+
+**What requires a Repo 1 PR first**: a new source needing its own new RAW table/schema, a
+new AWS bucket or broader privileges, a new domain database, or standing up a brand-new
+downstream repo for a new domain team — anything that doesn't exist yet in Repo 1's
+Terraform/DCM definitions.
 
 ---
 
@@ -153,7 +185,7 @@ module — remote (S3) state, deployed automatically by CI on every merge to `ma
 
 | Tool | Version used | Notes |
 |---|---|---|
-| Terraform | 1.16.0 | Pinned via `.terraform-version` |
+| Terraform | 1.16.0 | Pinned via `terraform/.terraform-version` |
 | Snowflake CLI (`snow`) | 3.25.0 | Used by DCM's `snow dcm` commands in CI |
 | AWS CLI | 2.36.33 | Only needed for the one-time bootstrap steps below |
 | GitHub CLI (`gh`) | 2.98.0 | Convenience for managing the repo/PRs |
@@ -174,21 +206,21 @@ problem: the ongoing, CI-managed root module needs an S3 backend and a CI identi
 exist before it can run — and neither of those can create themselves. Both are applied
 **once, manually, with local state**, and are never touched by CI afterward.
 
-### 1. `bootstrap/state-backend/` — creates the S3 bucket for Terraform's own remote state
+### 1. `terraform/bootstrap/state-backend/` — creates the S3 bucket for Terraform's own remote state
 
 ```powershell
-cd bootstrap/state-backend
+cd terraform/bootstrap/state-backend
 terraform init
 terraform apply -auto-approve
 ```
 
 Creates the S3 bucket (`snowflake-platform-tf-state-525218385225`, versioned, AES256-encrypted,
-public access blocked) that the repo-root module's backend (`env/dev/backend.hcl`) points at.
+public access blocked) that the repo-root module's backend (`terraform/env/dev/backend.hcl`) points at.
 
-### 2. `bootstrap/oidc-identity/` — creates the GitHub OIDC trust + CI IAM role
+### 2. `terraform/bootstrap/oidc-identity/` — creates the GitHub OIDC trust + CI IAM role
 
 ```powershell
-cd bootstrap/oidc-identity
+cd terraform/bootstrap/oidc-identity
 terraform init
 terraform apply -auto-approve
 ```
@@ -198,25 +230,26 @@ Creates the GitHub OIDC provider (one per AWS account) and the IAM role
 stored AWS access keys anywhere. Deliberately run by a human, not by CI, since CI can't
 bootstrap its own permissions using the permissions it doesn't have yet.
 
-### 3. Repo-root module — first apply, from CI
+### 3. Repo-root module (`terraform/`) — first apply, from CI
 
-Once both bootstrap stacks exist, the repo-root module (everything else in this repo) is
+Once both bootstrap stacks exist, the repo-root module (`terraform/`, minus `bootstrap/`) is
 initialized and applied **by CI**, not locally:
 
 ```powershell
-# from the repo root — only works inside real GitHub Actions (see Prerequisites above)
+# from terraform/ — only works inside real GitHub Actions (see Prerequisites above)
 terraform init -backend-config="env/dev/backend.hcl"
 ```
 
 Its first successful `terraform apply` creates the GitHub OIDC service users
 (`GITHUB_DEV_TERRAFORM_SVC`, `GITHUB_DEV_DCM_SVC`, `GITHUB_DEV_DBT_SVC`,
-`GITHUB_DEV_INGEST_SVC` — see `oidc_service_user.tf`) that every subsequent CI run, and
-Repos 2/3's pipelines, authenticate as.
+`GITHUB_DEV_INGEST_SVC` — see `terraform/oidc_service_user.tf`) that every subsequent CI
+run, and Repos 2/3's pipelines, authenticate as.
 
 ### Mandatory notes
-- Both bootstrap stacks' local state files (`bootstrap/*/terraform.tfstate`) are **not**
-  pushed to git (covered by `.gitignore`) — they're the only authoritative record of what's
-  been applied, so never delete them without first confirming nothing live depends on them.
+- Both bootstrap stacks' local state files (`terraform/bootstrap/*/terraform.tfstate`) are
+  **not** pushed to git (covered by `.gitignore`) — they're the only authoritative record of
+  what's been applied, so never delete them without first confirming nothing live depends
+  on them.
 - The S3 state bucket region is `ap-southeast-2` (Sydney), matching the client's AWS region.
 
 ---
@@ -261,11 +294,10 @@ service-user subject claim.
 ## History — Terraform → DCM Cutover
 
 Databases, schemas, warehouses, functional roles, and DB grants were originally defined as
-Terraform resources. They were migrated to DCM (`sources/definitions/*.sql`) per the
-ownership split in `MDP_Platform_Engineering_CICD_IaC_Repo_Architecture_v0.1.md` §2.2, using
-`removed` blocks (`removed.tf`) so Terraform forgot them without destroying the live
-Snowflake objects — DCM adopted the exact same objects with no disruption. Names were also
-changed from generic to Customer-domain-scoped at the same time:
+Terraform resources. They were migrated to DCM (`dcm/sources/definitions/*.sql`), using
+`removed` blocks (`terraform/removed.tf`) so Terraform forgot them without destroying the
+live Snowflake objects — DCM adopted the exact same objects with no disruption. Names were
+also changed from generic to Customer-domain-scoped at the same time:
 
 | Old (Terraform, generic) | Current (DCM, Customer-domain) |
 |---|---|
@@ -278,7 +310,7 @@ changed from generic to Customer-domain-scoped at the same time:
 
 Warehouses (`DEV_INGEST_WH`/`DEV_TRANSFORM_WH`/`DEV_REPORTING_WH`) were unchanged by this
 move — they remain account-level shared compute, not domain-prefixed. The current, live
-definitions for all of the above are `sources/definitions/databases.sql`, `schemas.sql`,
+definitions for all of the above are `dcm/sources/definitions/databases.sql`, `schemas.sql`,
 `warehouses.sql`, `roles.sql`, `database_roles.sql`, and `grants.sql` — treat those files,
 not this table, as the source of truth going forward.
 
@@ -291,7 +323,7 @@ not this table, as the source of truth going forward.
 Log in to `https://xygpmhm-gq04150.snowflakecomputing.com` as `RADHAASINGH` and run:
 
 ```sql
--- Verify Customer domain database (DCM-managed, see sources/definitions/)
+-- Verify Customer domain database (DCM-managed, see dcm/sources/definitions/)
 SHOW DATABASES LIKE '%DEV%';
 -- Expect: DEV_CUSTOMER_DB, DEV_ADMIN_DB
 
@@ -329,6 +361,11 @@ aws s3api get-public-access-block --bucket snowflake-platform-tf-state-525218385
 ### On GitHub
 
 ```powershell
+# Verify only the one actually-used secret exists (AWS_REGION) — no stored Snowflake
+# credentials or static AWS access keys should be present
+gh secret list --repo radhasgrl/snowflake-platform-tf
+# Expected: AWS_REGION only
+
 # Verify both environments exist, each with its own OIDC-scoped identity
 gh api repos/radhasgrl/snowflake-platform-tf/environments --jq '.environments[].name'
 # Expected: DEV-Terraform, DEV-DCM
@@ -344,15 +381,16 @@ gh run list --repo radhasgrl/snowflake-platform-tf --limit 3
 
 ### Local Terraform verification — important limitation
 
-`terraform plan`/`apply`/`import` against the **repo-root module** cannot be run locally —
-the Snowflake provider's `WORKLOAD_IDENTITY` authenticator requires a genuine GitHub
-Actions-issued OIDC token (fetched via `ACTIONS_ID_TOKEN_REQUEST_TOKEN`), which only exists
-inside real GitHub Actions runtime. This blocks *every* command against that module, not
-just ones touching Snowflake resources, since Terraform configures all declared providers
-before running any operation. To verify the root module, use `workflow_dispatch` to run
+`terraform plan`/`apply`/`import` against the **repo-root module** (`terraform/`, minus
+`bootstrap/`) cannot be run locally — the Snowflake provider's `WORKLOAD_IDENTITY`
+authenticator requires a genuine GitHub Actions-issued OIDC token (fetched via
+`ACTIONS_ID_TOKEN_REQUEST_TOKEN`), which only exists inside real GitHub Actions runtime.
+This blocks *every* command against that module, not just ones touching Snowflake
+resources, since Terraform configures all declared providers before running any operation.
+To verify the root module, use `workflow_dispatch` to run
 `terraform-plan.yml`/`terraform-apply.yml` for real, or read the PR comment a real CI run
-posts. The two `bootstrap/` stacks are the exception — they only use the AWS provider, so
-`terraform plan` against them works locally with valid AWS credentials.
+posts. The two `terraform/bootstrap/` stacks are the exception — they only use the AWS
+provider, so `terraform plan` against them works locally with valid AWS credentials.
 
 ---
 
@@ -376,16 +414,19 @@ posts. The two `bootstrap/` stacks are the exception — they only use the AWS p
 Disclosed deliberately, not hidden — these are the honest boundaries of what this demo
 build covers:
 
-- **DEV-only.** `env/qa/` and `env/prod/` tfvars/backend configs are scaffolded but not
-  wired into any pipeline. Extending to QA/PROD is a repeatable pattern (new GitHub
-  Environment pair, new OIDC service-user pair, new DCM manifest target) — not a redesign.
-- **Masking/row-access policies are inert placeholders** (`sources/definitions/masking.sql`,
-  `row_access.sql`) — pass-through/allow-all, pending client-confirmed PII/RLS rules.
+- **DEV-only.** `terraform/env/qa/` and `terraform/env/prod/` tfvars/backend configs are
+  scaffolded but not wired into any pipeline. Extending to QA/PROD is a repeatable pattern
+  (new GitHub Environment pair, new OIDC service-user pair, new DCM manifest target) — not
+  a redesign.
+- **Masking/row-access policies are inert placeholders**
+  (`dcm/sources/definitions/masking.sql`, `row_access.sql`) — pass-through/allow-all,
+  pending client-confirmed PII/RLS rules.
 - **No human-identity path.** Every identity in this repo is a service account (OIDC
   workload identity); there's no SSO/SCIM/MFA/network-policy story modeled here.
-- A legacy, currently-unused DynamoDB table (`bootstrap/state-backend/main.tf`) is still
-  provisioned from an earlier design that predates `use_lockfile`-based S3 locking — a
-  candidate for removal, not a functional dependency.
+- A legacy, currently-unused DynamoDB table (`aws_dynamodb_table.tf_lock` in
+  `terraform/bootstrap/state-backend/main.tf`) is still provisioned from an earlier design
+  that predates `use_lockfile`-based S3 locking. Confirmed unused by the current backend
+  config — kept intentionally rather than destroyed, not a functional dependency.
 
 ---
 
@@ -393,7 +434,7 @@ build covers:
 
 | Item | Scope | Status |
 |---|---|---|
-| RBAC | Tiered persona → functional → database/warehouse roles | ✅ Implemented (`sources/definitions/roles.sql`, `database_roles.sql`, `grants.sql`) |
+| RBAC | Tiered persona → functional → database/warehouse roles | ✅ Implemented (`dcm/sources/definitions/roles.sql`, `database_roles.sql`, `grants.sql`) |
 | Masking / row-access policies | PII/RLS enforcement | 🟡 Scaffolded as placeholders; real rules pending client input |
 | dbt integration | Repo 3 (`customer-domain-dbt`) — staging → marts | ✅ Implemented and verified end-to-end |
 | Ingestion | Repo 2 (`data-ingestion-raw`) — Snowpipe S3 → RAW | ✅ Implemented and verified end-to-end |

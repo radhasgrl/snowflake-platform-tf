@@ -118,8 +118,8 @@ resource "snowflake_grant_account_role" "github_dev_dcm_securityadmin" {
 # dbt identity — deliberately least-privilege, unlike the two identities above. This user
 # gets no admin role grants from Terraform at all; DCM grants it only the
 # DEV_CUSTOMER_DBT_SERVICE_PRSN persona role it actually needs (see
-# sources/definitions/grants.sql), demonstrating the tiered RBAC model in practice for a
-# real downstream workload (Repo 3, customer-domain-dbt).
+# ../dcm/sources/definitions/grants.sql), demonstrating the tiered RBAC model in practice
+# for a real downstream workload (Repo 3, customer-domain-dbt).
 resource "snowflake_execute" "github_dev_dbt_service_user" {
   provider = snowflake.useradmin
 
@@ -139,9 +139,9 @@ resource "snowflake_execute" "github_dev_dbt_service_user" {
 
 # Ingestion identity (Repo 2, data-ingestion-raw) — same least-privilege pattern as the dbt
 # identity above. DCM grants it DEV_CUSTOMER_INGEST_SERVICE_PRSN only (see
-# sources/definitions/grants.sql), which in turn only carries DEV_CUSTOMER_INGEST_FNCRL —
-# enough to create/manage the storage integration, stage, file format and pipe, and load
-# into RAW, nothing more.
+# ../dcm/sources/definitions/grants.sql), which in turn only carries
+# DEV_CUSTOMER_INGEST_FNCRL — enough to create/manage the storage integration, stage, file
+# format and pipe, and load into RAW, nothing more.
 resource "snowflake_execute" "github_dev_ingest_service_user" {
   provider = snowflake.useradmin
 

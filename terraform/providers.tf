@@ -28,8 +28,8 @@ provider "snowflake" {
 
 # USERADMIN provider — the only role this repo's Terraform resources still need going
 # forward, now that databases/schemas/warehouses/roles/grants/masking/row-access policies
-# have moved to DCM (sources/definitions/). Terraform's remaining scope is identity/OIDC
-# bootstrap only (oidc_service_user.tf), which exclusively uses USERADMIN.
+# have moved to DCM (../dcm/sources/definitions/). Terraform's remaining scope is
+# identity/OIDC bootstrap only (oidc_service_user.tf), which exclusively uses USERADMIN.
 provider "snowflake" {
   alias                      = "useradmin"
   organization_name          = var.snowflake_organization_name
