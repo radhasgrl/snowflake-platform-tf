@@ -22,7 +22,7 @@ variable "environment" {
 }
 
 variable "snowflake_oidc_user" {
-  description = "Snowflake service user to authenticate as via GitHub OIDC workload identity. Differs per workflow: GITHUB_OIDC_TERRAFORM_SVC for apply (push to main), GITHUB_OIDC_TERRAFORM_PLAN_SVC for plan (pull_request) — Snowflake's WORKLOAD_IDENTITY subject match is exact, so each trigger needs its own service user."
+  description = "Snowflake service user to authenticate as via GitHub OIDC workload identity. GITHUB_DEV_TERRAFORM_SVC, scoped to the DEV-Terraform GitHub Environment — used for both plan and apply, since the subject claim is now keyed on environment rather than push/pull_request."
   type        = string
-  default     = "GITHUB_OIDC_TERRAFORM_SVC"
+  default     = "GITHUB_DEV_TERRAFORM_SVC"
 }
