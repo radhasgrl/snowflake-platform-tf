@@ -13,14 +13,14 @@ structure (Repo 2: `data-ingestion-raw` — Snowpipe ingestion into RAW; Repo 3:
 
 1. [Architecture Overview](#architecture-overview)
 2. [Folder Structure](#folder-structure)
-3. [Phase 0 — Tools & Prerequisites](#phase-0--tools--prerequisites)
-4. [Phase 1 — Authentication](#phase-1--authentication)
-5. [Phase 2 — Terraform Remote State (AWS S3)](#phase-2--terraform-remote-state-aws-s3)
-6. [Phase 3 — GitHub Actions CI/CD](#phase-3--github-actions-cicd)
-7. [Phase 4 — Snowflake Foundation Objects](#phase-4--snowflake-foundation-objects)
-8. [Verification Guide](#verification-guide)
-9. [Key Decisions](#key-decisions)
-10. [New Session Setup](#new-session-setup)
+3. [Prerequisites](#prerequisites)
+4. [One-Time Bootstrap (run once, by hand)](#one-time-bootstrap-run-once-by-hand)
+5. [CI/CD Pipeline (ongoing, automated)](#cicd-pipeline-ongoing-automated)
+6. [History — Terraform → DCM Cutover](#history--terraform--dcm-cutover)
+7. [Verification Guide](#verification-guide)
+8. [Key Decisions](#key-decisions)
+9. [Known Limitations (demo scope)](#known-limitations-demo-scope)
+10. [What's Next](#whats-next)
 
 ---
 
@@ -30,12 +30,17 @@ This repo is **Repo 1 ("infra-snowflake") of a 3-repo platform**, pairing Terraf
 Snowflake's native DCM (Database Change Management), per the ownership split agreed with
 the client in `MDP_Platform_Engineering_CICD_IaC_Repo_Architecture_v0.1.md` §2.2:
 
-- **Terraform** owns the account/platform layer only: GitHub OIDC service identities
-  (`GITHUB_DEV_TERRAFORM_SVC`, `GITHUB_DEV_DCM_SVC`).
+- **Terraform** owns the account/platform layer for the whole 3-repo platform, not just
+  this repo: GitHub OIDC service identities for all 4 engines (`GITHUB_DEV_TERRAFORM_SVC`,
+  `GITHUB_DEV_DCM_SVC`, `GITHUB_DEV_DBT_SVC` for Repo 3, `GITHUB_DEV_INGEST_SVC` for Repo 2),
+  plus the AWS infrastructure Repo 2's ingestion pipeline runs against (S3 bucket + 2 IAM
+  roles — `ingestion_aws_infra.tf`). Repo 2 itself contains ingestion **code** only, no
+  infrastructure.
 - **DCM** owns the database object layer: databases, schemas, warehouses, tiered RBAC roles,
   DB grants, and placeholder masking/row-access policies (`sources/definitions/*.sql`).
 
-Identities are scoped to **GitHub Environments** (`DEV-Terraform`, `DEV-DCM`), not to a
+Identities are scoped to **GitHub Environments** (`DEV-Terraform`, `DEV-DCM`, and each
+downstream repo's own environment — `DEV-Ingest` in Repo 2, `DEV-dbt` in Repo 3), not to a
 branch or event — see the OIDC rationale comment at the top of `oidc_service_user.tf`. This
 decouples environment from branch so a future trunk-based TEST/UAT/PROD promotion flow
 doesn't require re-architecting the identity model.
@@ -49,20 +54,26 @@ GitHub Actions (CI/CD) — single pipeline, two engines, sequential jobs
  └── terraform-apply.yml  (push)  → apply job → dcm-deploy job (needs: apply)
           │
           ├── Terraform: fetches state from S3 (ap-southeast-2), authenticates to
-          │   Snowflake via GitHub OIDC / WORKLOAD_IDENTITY (no stored keys) — creates/updates
-          │   the GITHUB_DEV_TERRAFORM_SVC and GITHUB_DEV_DCM_SVC service users
+          │   Snowflake via GitHub OIDC / WORKLOAD_IDENTITY (no stored keys) and to AWS via
+          │   GitHub OIDC (no stored access keys) — creates/updates the 4 GitHub OIDC
+          │   service users and the ingestion AWS infra (S3 bucket + 2 IAM roles)
           └── DCM (snow CLI): authenticates as GITHUB_DEV_DCM_SVC via the same OIDC pattern —
               creates/updates databases, schemas, warehouses, tiered RBAC roles
               (persona -> functional -> database/warehouse roles), grants, and placeholder
               masking/row-access policies
 
 AWS (ap-southeast-2 / Sydney)
- └── S3 bucket: snowflake-platform-tf-state-525218385225
-      └── workload/dev/terraform.tfstate   ← encrypted, versioned (Terraform's state only — DCM has no separate state file, it diffs its SQL definitions against live Snowflake metadata)
+ ├── S3 bucket: snowflake-platform-tf-state-525218385225
+ │    └── workload/dev/terraform.tfstate   ← encrypted, versioned (Terraform's state only — DCM has no separate state file, it diffs its SQL definitions against live Snowflake metadata)
+ └── S3 bucket: data-ingestion-raw-525218385225 + 2 IAM roles   ← Repo 2's ingestion infra,
+      provisioned here (ingestion_aws_infra.tf), used by Repo 2's pipeline and Snowflake's
+      storage integration
 
 Snowflake Account: xygpmhm-gq04150
  ├── GITHUB_DEV_TERRAFORM_SVC — Terraform identity (OIDC, GitHub Environment DEV-Terraform)
  ├── GITHUB_DEV_DCM_SVC       — DCM identity (OIDC, GitHub Environment DEV-DCM)
+ ├── GITHUB_DEV_INGEST_SVC    — Repo 2's identity (OIDC, least-privilege, scoped to ingestion only)
+ ├── GITHUB_DEV_DBT_SVC       — Repo 3's identity (OIDC, least-privilege, scoped to dbt only)
  └── DCM-managed objects: DEV_CUSTOMER_DB (Customer domain — RAW/STAGING/MARTS/SHARED
      schemas), shared warehouses, tiered RBAC roles (DEV_CUSTOMER_DATA_ENGINEER_PRSN,
      DEV_CUSTOMER_INGEST_FNCRL, DEV_CUSTOMER_DB.RAW_SCRL_R/_W, DEV_INGEST_WH_WHRL_U/_M/_O,
@@ -138,120 +149,32 @@ module — remote (S3) state, deployed automatically by CI on every merge to `ma
 
 ---
 
-## Phase 0 — Tools & Prerequisites
+## Prerequisites
 
-### What was installed
-
-| Tool | Version | Location |
+| Tool | Version used | Notes |
 |---|---|---|
-| Terraform | 1.16.0 | `C:\tools\terraform\terraform.exe` |
-| Snowflake CLI | 3.25.0 | Python 3.11 pip install |
-| AWS CLI | 2.36.33 | winget |
-| GitHub CLI | 2.98.0 | `C:\Program Files\GitHub CLI\gh.exe` |
-| Git | 2.55.0 | Pre-installed |
-| OpenSSL | (via Git) | `C:\Users\...\AppData\Local\Programs\Git\usr\bin\openssl.exe` |
+| Terraform | 1.16.0 | Pinned via `.terraform-version` |
+| Snowflake CLI (`snow`) | 3.25.0 | Used by DCM's `snow dcm` commands in CI |
+| AWS CLI | 2.36.33 | Only needed for the one-time bootstrap steps below |
+| GitHub CLI (`gh`) | 2.98.0 | Convenience for managing the repo/PRs |
+| Git | 2.55.0 | |
 
-### How it was done
-
-```powershell
-# Terraform — manual download, no admin rights needed
-New-Item -ItemType Directory -Path C:\tools\terraform
-# Download terraform_1.16.0_windows_amd64.zip from releases.hashicorp.com
-# Extract terraform.exe to C:\tools\terraform\
-
-# Snowflake CLI — via Python 3.11 (corporate SSL proxy workarounds required)
-py -3.11 -m pip install snowflake-cli `
-  --trusted-host pypi.org `
-  --trusted-host pypi.python.org `
-  --trusted-host files.pythonhosted.org
-
-# AWS CLI
-winget install Amazon.AWSCLI --source winget
-
-# GitHub CLI
-winget install GitHub.cli --source winget
-```
-
-### Mandatory notes
-- **No admin rights**: Machine-level PATH writes are blocked. PATH must be set per session (see [New Session Setup](#new-session-setup)).
-- **Corporate SSL proxy (Zscaler)**: All `pip install` commands require `--trusted-host` flags.
-- **Terraform version conflict**: winget installs an older version. Always use the manually downloaded binary at `C:\tools\terraform\`.
+No Terraform/Snowflake credentials need to be installed or configured locally for day-to-day
+work — the CI/CD pipeline authenticates entirely via GitHub OIDC (see below). Local
+Terraform commands against the repo-root module will not work outside real GitHub Actions
+runtime, because the Snowflake provider's `WORKLOAD_IDENTITY` authenticator requires a
+genuine GitHub Actions-issued OIDC token (see [Verification Guide](#verification-guide)).
 
 ---
 
-## Phase 1 — Authentication
+## One-Time Bootstrap (run once, by hand)
 
-### What was created
+Two small, independent Terraform root modules exist solely to solve a chicken-and-egg
+problem: the ongoing, CI-managed root module needs an S3 backend and a CI identity to
+exist before it can run — and neither of those can create themselves. Both are applied
+**once, manually, with local state**, and are never touched by CI afterward.
 
-| Item | Detail |
-|---|---|
-| RSA private key | `~/.ssh/snowflake/tf_snow_key.p8` (PKCS8, no passphrase) |
-| RSA public key | `~/.ssh/snowflake/tf_snow_key.pub` |
-| Snowflake service user | `TERRAFORM_SVC` — no password, RSA JWT auth only |
-| Roles granted to TERRAFORM_SVC | `SYSADMIN`, `SECURITYADMIN`, `USERADMIN` |
-| AWS CLI profile | IAM user `terraform-platform-svc` (Account: 525218385225, Region: ap-southeast-2) |
-| GitHub auth | `gh auth login` as `radhasgrl` |
-
-### How it was done
-
-```powershell
-# 1. Generate RSA key pair (via OpenSSL bundled with Git)
-$openssl = "C:\Users\radha.a.singh\AppData\Local\Programs\Git\usr\bin\openssl.exe"
-New-Item -ItemType Directory -Force -Path ~/.ssh/snowflake
-& $openssl genrsa -out ~/.ssh/snowflake/tf_snow_key_raw.pem 2048
-& $openssl pkey -in ~/.ssh/snowflake/tf_snow_key_raw.pem -out ~/.ssh/snowflake/tf_snow_key.p8
-& $openssl rsa -in ~/.ssh/snowflake/tf_snow_key.p8 -pubout -out ~/.ssh/snowflake/tf_snow_key.pub
-```
-
-```sql
--- 2. Run in Snowflake worksheet as ACCOUNTADMIN
-CREATE USER TERRAFORM_SVC
-  TYPE = SERVICE
-  RSA_PUBLIC_KEY = '<paste content of tf_snow_key.pub without header/footer lines>';
-
-GRANT ROLE SYSADMIN     TO USER TERRAFORM_SVC;
-GRANT ROLE SECURITYADMIN TO USER TERRAFORM_SVC;
-GRANT ROLE USERADMIN    TO USER TERRAFORM_SVC;
-```
-
-```powershell
-# 3. Configure AWS CLI
-aws configure
-# AWS Access Key ID: <terraform-platform-svc key>
-# AWS Secret Access Key: <terraform-platform-svc secret>
-# Default region: ap-southeast-2
-# Default output format: json
-
-# 4. Authenticate GitHub CLI
-& "C:\Program Files\GitHub CLI\gh.exe" auth login
-```
-
-### Mandatory notes
-- The public key pasted into Snowflake must have the `-----BEGIN PUBLIC KEY-----` / `-----END PUBLIC KEY-----` lines **removed** — paste only the base64 body.
-- The private key file (`.p8`) must **never be committed** to git — it is covered by `.gitignore`.
-- Three provider aliases in `providers.tf` (repo root) each use a different Snowflake role to enforce least-privilege:
-  - Default provider → `SYSADMIN` (databases, schemas, warehouses)
-  - `snowflake.useradmin` → role and user management
-  - `snowflake.securityadmin` → masking and row access policies
-
----
-
-## Phase 2 — Terraform Remote State (AWS S3)
-
-### What was created
-
-| Resource | Detail |
-|---|---|
-| S3 bucket | `snowflake-platform-tf-state-525218385225` (ap-southeast-2 / Sydney) |
-| Bucket versioning | Enabled — all state versions retained |
-| Bucket encryption | AES256 server-side encryption |
-| Public access | All public access blocked |
-| State locking | `use_lockfile = true` in S3 backend (no DynamoDB needed) |
-| State file location | `s3://snowflake-platform-tf-state-525218385225/workload/dev/terraform.tfstate` |
-
-### How it was done
-
-The bootstrap module uses a **local** Terraform state (intentionally — it bootstraps the remote backend).
+### 1. `bootstrap/state-backend/` — creates the S3 bucket for Terraform's own remote state
 
 ```powershell
 cd bootstrap/state-backend
@@ -259,147 +182,105 @@ terraform init
 terraform apply -auto-approve
 ```
 
-The repo root's `terraform.tf` then uses that S3 backend via `env/dev/backend.hcl`:
+Creates the S3 bucket (`snowflake-platform-tf-state-525218385225`, versioned, AES256-encrypted,
+public access blocked) that the repo-root module's backend (`env/dev/backend.hcl`) points at.
 
-```hcl
-backend "s3" {}   # bucket/key/region supplied per-environment via -backend-config
-```
+### 2. `bootstrap/oidc-identity/` — creates the GitHub OIDC trust + CI IAM role
 
 ```powershell
-# from the repo root
+cd bootstrap/oidc-identity
+terraform init
+terraform apply -auto-approve
+```
+
+Creates the GitHub OIDC provider (one per AWS account) and the IAM role
+(`snowflake-platform-tf-github-oidc`) that CI assumes via `AssumeRoleWithWebIdentity` — no
+stored AWS access keys anywhere. Deliberately run by a human, not by CI, since CI can't
+bootstrap its own permissions using the permissions it doesn't have yet.
+
+### 3. Repo-root module — first apply, from CI
+
+Once both bootstrap stacks exist, the repo-root module (everything else in this repo) is
+initialized and applied **by CI**, not locally:
+
+```powershell
+# from the repo root — only works inside real GitHub Actions (see Prerequisites above)
 terraform init -backend-config="env/dev/backend.hcl"
 ```
 
+Its first successful `terraform apply` creates the GitHub OIDC service users
+(`GITHUB_DEV_TERRAFORM_SVC`, `GITHUB_DEV_DCM_SVC`, `GITHUB_DEV_DBT_SVC`,
+`GITHUB_DEV_INGEST_SVC` — see `oidc_service_user.tf`) that every subsequent CI run, and
+Repos 2/3's pipelines, authenticate as.
+
 ### Mandatory notes
-- The bootstrap must be run **once only** before using the root module.
-- The bootstrap state (`bootstrap/state-backend/terraform.tfstate`) is local and **not** pushed to git (covered by `.gitignore`).
-- The S3 bucket was originally created in `eu-west-1` and later migrated to `ap-southeast-2` to align with the client's AWS region.
+- Both bootstrap stacks' local state files (`bootstrap/*/terraform.tfstate`) are **not**
+  pushed to git (covered by `.gitignore`) — they're the only authoritative record of what's
+  been applied, so never delete them without first confirming nothing live depends on them.
+- The S3 state bucket region is `ap-southeast-2` (Sydney), matching the client's AWS region.
 
 ---
 
-## Phase 3 — GitHub Actions CI/CD
+## CI/CD Pipeline (ongoing, automated)
 
-### What was created
+Authentication for **every** ongoing pipeline run — Terraform, DCM, and both downstream
+repos — is GitHub OIDC workload identity. There are no stored Snowflake credentials
+(no RSA keys, no passwords) and no stored long-lived AWS access keys anywhere in this
+repo's CI: AWS access is via the OIDC IAM role created above; Snowflake access is via each
+service user's `WORKLOAD_IDENTITY` auth, with the OIDC token fetched fresh inside each job.
 
-| Item | Detail |
-|---|---|
-| GitHub repository | `radhasgrl/snowflake-platform-tf` (private) |
-| Workflow: plan | `.github/workflows/terraform-plan.yml` — triggers on Pull Request |
-| Workflow: apply | `.github/workflows/terraform-apply.yml` — triggers on push to `main` |
-| GitHub secrets | 5 secrets set (see table below) |
-
-#### GitHub Secrets
-
-| Secret Name | What it holds |
-|---|---|
-| `AWS_ACCESS_KEY_ID` | IAM user `terraform-platform-svc` access key |
-| `AWS_SECRET_ACCESS_KEY` | IAM user `terraform-platform-svc` secret key |
-| `AWS_REGION` | `ap-southeast-2` |
-| `SNOWFLAKE_ACCOUNT` | `xygpmhm-gq04150` |
-| `SNOWFLAKE_PRIVATE_KEY` | Full content of `tf_snow_key.p8` (RSA private key) |
-
-### How it was done
-
-```powershell
-$gh = "C:\Program Files\GitHub CLI\gh.exe"
-
-# Create repo
-& $gh repo create radhasgrl/snowflake-platform-tf --private --source . --push
-
-# Set secrets
-& $gh secret set AWS_ACCESS_KEY_ID       --repo radhasgrl/snowflake-platform-tf
-& $gh secret set AWS_SECRET_ACCESS_KEY   --repo radhasgrl/snowflake-platform-tf
-Write-Output "ap-southeast-2" | & $gh secret set AWS_REGION --repo radhasgrl/snowflake-platform-tf
-Write-Output "xygpmhm-gq04150" | & $gh secret set SNOWFLAKE_ACCOUNT --repo radhasgrl/snowflake-platform-tf
-Get-Content ~/.ssh/snowflake/tf_snow_key.p8 | & $gh secret set SNOWFLAKE_PRIVATE_KEY --repo radhasgrl/snowflake-platform-tf
-```
-
-### How the pipeline works
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `.github/workflows/terraform-plan.yml` | Pull Request | `terraform fmt -check` + `validate` + `plan` (posted as PR comment) **and** `DCM Plan` (parallel job) |
+| `.github/workflows/terraform-apply.yml` | Push to `main` | `Terraform Apply`, then `DCM Deploy` (`needs: apply` — DCM can't authenticate until Terraform's identities exist) |
 
 ```
 Pull Request opened
-  └─► terraform-plan.yml runs
-        ├── Checks out code
-        ├── Configures AWS credentials (for S3 state access)
-        ├── Writes private key from secret → ~/.ssh/snowflake/tf_snow_key.p8
-        ├── terraform init  (connects to S3 backend)
-        ├── terraform plan  (shows what will change)
-        └── Posts plan output as PR comment
+  └─► terraform-plan.yml
+        ├── plan job:     fetches Snowflake OIDC token → terraform plan → posts PR comment
+        └── dcm-plan job: authenticates as GITHUB_DEV_DCM_SVC via OIDC → snow dcm plan → posts PR comment
+             (both jobs run in parallel — plan is read-only in both engines)
 
 PR merged to main
-  └─► terraform-apply.yml runs
-        ├── (same setup steps)
-        └── terraform apply -auto-approve  (creates/updates Snowflake objects)
+  └─► terraform-apply.yml
+        ├── apply job:       terraform apply -auto-approve
+        └── dcm-deploy job:  snow dcm deploy   (needs: apply — runs after, not parallel)
 ```
 
+Both workflows run under GitHub Environments `DEV-Terraform` and `DEV-DCM` respectively —
+visible under **Settings → Environments** in the GitHub UI, each scoped to its own OIDC
+service-user subject claim.
+
 ### Mandatory notes
-- `workflow_dispatch:` is added to both workflows so they can be triggered manually from the GitHub Actions UI without needing a PR or push.
-- The private key is written to disk inside the runner at the exact path expected by `terraform/foundation/variables.tf` (`~/.ssh/snowflake/tf_snow_key.p8`).
+- `workflow_dispatch:` is enabled on both workflows for manual triggering without needing a
+  PR or push.
+- This is deliberately **DEV-only** today — see [Known Limitations](#known-limitations-demo-scope).
 
 ---
 
-## Phase 4 — Snowflake Foundation Objects (superseded — now DCM-owned, see below)
+## History — Terraform → DCM Cutover
 
-> **Superseded**: the databases/schemas/warehouses described in this phase were originally
-> Terraform resources. They have since moved to DCM (`sources/definitions/`) per the
-> ownership split in `MDP_Platform_Engineering_CICD_IaC_Repo_Architecture_v0.1.md` §2.2, and
-> were renamed to be Customer-domain-scoped. The tables below are kept for history; current
-> names are:
->
-> | Old (Terraform, generic) | Current (DCM, Customer-domain) |
-> |---|---|
-> | `DEV_LANDING_DB` / `DEV_ANALYTICS_DB` / `DEV_COMMON_DB` | `DEV_CUSTOMER_DB` (single domain database) |
-> | `DEV_LANDING_DB.RAW` | `DEV_CUSTOMER_DB.RAW` |
-> | `DEV_ANALYTICS_DB.STAGING` | `DEV_CUSTOMER_DB.STAGING` |
-> | `DEV_ANALYTICS_DB.MARTS` | `DEV_CUSTOMER_DB.MARTS` |
-> | `DEV_COMMON_DB.UTILS` | `DEV_CUSTOMER_DB.SHARED` |
-> | `DEV_DATA_ENGINEER` / `_ANALYST` / `_CONSUMER` / `DEV_DBT_RUNNER` | Tiered: `DEV_CUSTOMER_*_PRSN` → `DEV_CUSTOMER_*_FNCRL` → `DEV_CUSTOMER_DB.*_SCRL_*` / `DEV_*_WH_WHRL_*` (see `sources/definitions/roles.sql`, `database_roles.sql`, `grants.sql`) |
->
-> Warehouses (`DEV_INGEST_WH`/`DEV_TRANSFORM_WH`/`DEV_REPORTING_WH`) are unchanged — they
-> remain account-level shared compute, not domain-prefixed.
+Databases, schemas, warehouses, functional roles, and DB grants were originally defined as
+Terraform resources. They were migrated to DCM (`sources/definitions/*.sql`) per the
+ownership split in `MDP_Platform_Engineering_CICD_IaC_Repo_Architecture_v0.1.md` §2.2, using
+`removed` blocks (`removed.tf`) so Terraform forgot them without destroying the live
+Snowflake objects — DCM adopted the exact same objects with no disruption. Names were also
+changed from generic to Customer-domain-scoped at the same time:
 
-### What was created
+| Old (Terraform, generic) | Current (DCM, Customer-domain) |
+|---|---|
+| `DEV_LANDING_DB` / `DEV_ANALYTICS_DB` / `DEV_COMMON_DB` | `DEV_CUSTOMER_DB` (single domain database) |
+| `DEV_LANDING_DB.RAW` | `DEV_CUSTOMER_DB.RAW` |
+| `DEV_ANALYTICS_DB.STAGING` | `DEV_CUSTOMER_DB.STAGING` |
+| `DEV_ANALYTICS_DB.MARTS` | `DEV_CUSTOMER_DB.MARTS` |
+| `DEV_COMMON_DB.UTILS` | `DEV_CUSTOMER_DB.SHARED` |
+| `DEV_DATA_ENGINEER` / `_ANALYST` / `_CONSUMER` / `DEV_DBT_RUNNER` | Tiered: `DEV_CUSTOMER_*_PRSN` → `DEV_CUSTOMER_*_FNCRL` → `DEV_CUSTOMER_DB.*_SCRL_*` / `DEV_*_WH_WHRL_*` |
 
-All resources are environment-prefixed using `var.environment` (default: `dev`).
-
-#### Databases
-
-| Terraform Resource | Snowflake Name | Purpose |
-|---|---|---|
-| `snowflake_database.landing` | `DEV_LANDING_DB` | Raw ingestion zone — untransformed source data |
-| `snowflake_database.analytics` | `DEV_ANALYTICS_DB` | Transformed and curated analytics layer |
-| `snowflake_database.common` | `DEV_COMMON_DB` | Shared utilities — UDFs, procedures, reference data |
-
-#### Schemas
-
-| Terraform Resource | Snowflake Location | Purpose |
-|---|---|---|
-| `snowflake_schema.landing_raw` | `DEV_LANDING_DB.RAW` | Initial landing area for all source ingestion |
-| `snowflake_schema.analytics_staging` | `DEV_ANALYTICS_DB.STAGING` | Intermediate dbt models |
-| `snowflake_schema.analytics_marts` | `DEV_ANALYTICS_DB.MARTS` | Final business-facing data marts |
-| `snowflake_schema.common_utils` | `DEV_COMMON_DB.UTILS` | Shared UDFs and stored procedures |
-
-#### Warehouses
-
-| Terraform Resource | Snowflake Name | Size | Auto-suspend | Purpose |
-|---|---|---|---|---|
-| `snowflake_warehouse.ingest` | `DEV_INGEST_WH` | XSMALL | 60s | Data loading and ingestion |
-| `snowflake_warehouse.transform` | `DEV_TRANSFORM_WH` | XSMALL (dev) / SMALL (prod) | 120s | dbt transformations |
-| `snowflake_warehouse.reporting` | `DEV_REPORTING_WH` | XSMALL | 60s | BI tools and ad-hoc queries |
-
-All warehouses start as `initially_suspended = true` — they only run when used.
-
-### How it was done
-
-Code was written in `terraform/foundation/main.tf` and pushed to `main`.
-The `terraform-apply.yml` pipeline triggered automatically and applied the changes.
-
-```powershell
-git add terraform/foundation/
-git commit -m "feat: Phase 4 - Snowflake foundation databases, schemas, warehouses (DEV)"
-git push origin main
-# Pipeline ran and created all 10 resources in Snowflake
-```
+Warehouses (`DEV_INGEST_WH`/`DEV_TRANSFORM_WH`/`DEV_REPORTING_WH`) were unchanged by this
+move — they remain account-level shared compute, not domain-prefixed. The current, live
+definitions for all of the above are `sources/definitions/databases.sql`, `schemas.sql`,
+`warehouses.sql`, `roles.sql`, `database_roles.sql`, and `grants.sql` — treat those files,
+not this table, as the source of truth going forward.
 
 ---
 
@@ -433,8 +314,8 @@ aws s3api get-bucket-versioning --bucket snowflake-platform-tf-state-52521838522
 # Expected: { "Status": "Enabled" }
 
 # Verify state file is present
-aws s3 ls s3://snowflake-platform-tf-state-525218385225/foundation/ --region ap-southeast-2
-# Expected: terraform.tfstate (approx 57 KB)
+aws s3 ls s3://snowflake-platform-tf-state-525218385225/workload/dev/ --region ap-southeast-2
+# Expected: terraform.tfstate
 
 # Verify encryption
 aws s3api get-bucket-encryption --bucket snowflake-platform-tf-state-525218385225 --region ap-southeast-2
@@ -448,39 +329,30 @@ aws s3api get-public-access-block --bucket snowflake-platform-tf-state-525218385
 ### On GitHub
 
 ```powershell
-$gh = "C:\Program Files\GitHub CLI\gh.exe"
-
-# Verify all 5 secrets are set
-& $gh secret list --repo radhasgrl/snowflake-platform-tf
-# Expected: AWS_ACCESS_KEY_ID, AWS_REGION, AWS_SECRET_ACCESS_KEY,
-#           SNOWFLAKE_ACCOUNT, SNOWFLAKE_PRIVATE_KEY
+# Verify both environments exist, each with its own OIDC-scoped identity
+gh api repos/radhasgrl/snowflake-platform-tf/environments --jq '.environments[].name'
+# Expected: DEV-Terraform, DEV-DCM
 
 # Verify latest pipeline runs all passed
-& $gh run list --repo radhasgrl/snowflake-platform-tf --limit 5
-# Expected: all rows show ✓
-
-# Verify workflow files exist
-& $gh api repos/radhasgrl/snowflake-platform-tf/contents/.github/workflows
+gh run list --repo radhasgrl/snowflake-platform-tf --limit 5
+# Expected: all rows show success
 
 # Manually trigger a plan run (no PR needed)
-& $gh workflow run terraform-plan.yml --repo radhasgrl/snowflake-platform-tf
-& $gh run list --repo radhasgrl/snowflake-platform-tf --limit 3
+gh workflow run terraform-plan.yml --repo radhasgrl/snowflake-platform-tf
+gh run list --repo radhasgrl/snowflake-platform-tf --limit 3
 ```
 
-### Local Terraform verification
+### Local Terraform verification — important limitation
 
-```powershell
-# Session setup (required each new terminal)
-$env:PATH = "C:\tools\terraform;C:\Users\radha.a.singh\AppData\Local\Programs\Python\Python311\Scripts;C:\Program Files\GitHub CLI;" + $env:PATH
-
-cd "C:\Users\radha.a.singh\OneDrive - Accenture\Documents\Snowflake_Platform_TF\terraform\foundation"
-
-# Confirm backend points to Sydney and state is accessible
-terraform init
-
-# Confirm no drift — should show "No changes. Infrastructure is up-to-date."
-terraform plan
-```
+`terraform plan`/`apply`/`import` against the **repo-root module** cannot be run locally —
+the Snowflake provider's `WORKLOAD_IDENTITY` authenticator requires a genuine GitHub
+Actions-issued OIDC token (fetched via `ACTIONS_ID_TOKEN_REQUEST_TOKEN`), which only exists
+inside real GitHub Actions runtime. This blocks *every* command against that module, not
+just ones touching Snowflake resources, since Terraform configures all declared providers
+before running any operation. To verify the root module, use `workflow_dispatch` to run
+`terraform-plan.yml`/`terraform-apply.yml` for real, or read the PR comment a real CI run
+posts. The two `bootstrap/` stacks are the exception — they only use the AWS provider, so
+`terraform plan` against them works locally with valid AWS credentials.
 
 ---
 
@@ -489,30 +361,41 @@ terraform plan
 | Decision | Choice | Reason |
 |---|---|---|
 | IaC tool | Terraform 1.16.0 | Client requirement; not OpenTofu |
-| Snowflake auth | RSA key pair JWT | No passwords; service account best practice |
-| State storage | AWS S3 + `use_lockfile` | Secure, versioned, no DynamoDB required |
+| Snowflake auth | GitHub OIDC workload identity (`WORKLOAD_IDENTITY` authenticator) | No stored keys or passwords anywhere — short-lived tokens fetched fresh per CI run |
+| AWS auth | GitHub OIDC (`AssumeRoleWithWebIdentity`) | Same reasoning — no stored AWS access keys in CI |
+| State storage | AWS S3 + `use_lockfile` | Secure, versioned, native S3 locking (Terraform ≥ 1.10) |
 | State region | `ap-southeast-2` (Sydney) | Aligns with client's AWS region |
-| Environment strategy | Single account, env-prefix naming | `DEV_`, `QA_`, `PROD_` prefixes on all objects |
-| Snowflake provider | `snowflakedb/snowflake ~> 2.0` | Resolved to v2.20.0 |
+| Environment strategy | Single account, env-prefix naming | `DEV_`, `QA_`, `PROD_` prefixes on all objects — only `DEV_` is wired up today |
+| Snowflake provider | `snowflakedb/snowflake ~> 2.0` | Resolved to v2.21.0 |
 | CI/CD | GitHub Actions | Already used for source control |
 
 ---
 
-## New Session Setup
+## Known Limitations (demo scope)
 
-Each new PowerShell terminal requires these commands (PATH is not persisted without admin rights):
+Disclosed deliberately, not hidden — these are the honest boundaries of what this demo
+build covers:
 
-```powershell
-$env:PATH = "C:\tools\terraform;C:\Users\radha.a.singh\AppData\Local\Programs\Python\Python311\Scripts;C:\Program Files\GitHub CLI;" + $env:PATH
-Set-Alias -Name gh -Value "C:\Program Files\GitHub CLI\gh.exe"
-Set-Location "C:\Users\radha.a.singh\OneDrive - Accenture\Documents\Snowflake_Platform_TF"
-```
+- **DEV-only.** `env/qa/` and `env/prod/` tfvars/backend configs are scaffolded but not
+  wired into any pipeline. Extending to QA/PROD is a repeatable pattern (new GitHub
+  Environment pair, new OIDC service-user pair, new DCM manifest target) — not a redesign.
+- **Masking/row-access policies are inert placeholders** (`sources/definitions/masking.sql`,
+  `row_access.sql`) — pass-through/allow-all, pending client-confirmed PII/RLS rules.
+- **No human-identity path.** Every identity in this repo is a service account (OIDC
+  workload identity); there's no SSO/SCIM/MFA/network-policy story modeled here.
+- A legacy, currently-unused DynamoDB table (`bootstrap/state-backend/main.tf`) is still
+  provisioned from an earlier design that predates `use_lockfile`-based S3 locking — a
+  candidate for removal, not a functional dependency.
 
 ---
 
 ## What's Next
 
-| Phase | Scope | Status |
+| Item | Scope | Status |
 |---|---|---|
-| Phase 5 | RBAC — functional roles, grants, masking policies, row access policies | 🟡 Foundation implemented; masking/RLS require client rules |
-| Phase 6 | dbt integration + schema change migrations (schemachange/Flyway) | ⬜ Not started |
+| RBAC | Tiered persona → functional → database/warehouse roles | ✅ Implemented (`sources/definitions/roles.sql`, `database_roles.sql`, `grants.sql`) |
+| Masking / row-access policies | PII/RLS enforcement | 🟡 Scaffolded as placeholders; real rules pending client input |
+| dbt integration | Repo 3 (`customer-domain-dbt`) — staging → marts | ✅ Implemented and verified end-to-end |
+| Ingestion | Repo 2 (`data-ingestion-raw`) — Snowpipe S3 → RAW | ✅ Implemented and verified end-to-end |
+| QA / PROD environments | Second+ environment tier, promotion flow | ⬜ Not started — pattern documented, not built |
+| Schema migrations tooling (schemachange/Flyway) | Versioned migration history beyond DCM's own diffing | ⬜ Not started |
