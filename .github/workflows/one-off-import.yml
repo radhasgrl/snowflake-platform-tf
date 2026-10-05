@@ -1,0 +1,67 @@
+name: ONE-OFF - Import Ingestion AWS Resources
+
+# Temporary, one-time workflow to import already-live AWS resources (S3 bucket + 2 IAM
+# roles, previously managed by Repo 2's standalone aws/ Terraform) into this repo's main
+# Terraform state. Must run as real CI (not locally) because this module also declares the
+# Snowflake provider, which requires a real GitHub-Actions-issued OIDC token to configure —
+# there is no way to satisfy that locally outside of GitHub Actions' runtime.
+#
+# Delete this file once the import has run successfully once — it is not meant to be a
+# permanent part of this repo's pipeline.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  import:
+    name: Import ingestion AWS resources
+    runs-on: ubuntu-latest
+    environment:
+      name: DEV-Terraform
+
+    env:
+      TF_VAR_snowflake_organization_name: xygpmhm
+      TF_VAR_snowflake_account_name: gq04150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::525218385225:role/snowflake-platform-tf-github-oidc
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.0"
+
+      - name: Fetch Snowflake OIDC token
+        run: |
+          TOKEN=$(curl -sSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=snowflakecomputing.com" | jq -r '.value')
+          echo "::add-mask::$TOKEN"
+          echo "SNOWFLAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+
+      - name: Terraform Init
+        run: terraform init -backend-config="env/dev/backend.hcl"
+
+      - name: Import ingestion AWS resources (idempotent - already-imported resources just no-op/error harmlessly)
+        run: |
+          terraform import aws_iam_role.github_actions_ingestion data-ingestion-raw-github-oidc || true
+          terraform import aws_iam_role_policy.ingestion_bucket_access "data-ingestion-raw-github-oidc:ingestion-raw-s3-access" || true
+          terraform import aws_s3_bucket.ingestion_raw data-ingestion-raw-525218385225 || true
+          terraform import aws_s3_bucket_versioning.ingestion_raw data-ingestion-raw-525218385225 || true
+          terraform import aws_iam_role.snowflake_storage_integration data-ingestion-raw-snowflake-storage-integration || true
+          terraform import aws_iam_role_policy.snowflake_storage_integration_access "data-ingestion-raw-snowflake-storage-integration:snowflake-storage-integration-s3-access" || true
+
+      - name: Terraform Plan (verify clean - should show 0 changes for the imported resources)
+        run: terraform plan -var-file="env/dev/dev.tfvars" -no-color
