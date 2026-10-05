@@ -1,5 +1,8 @@
 name: Terraform Apply
 
+# Deliberately DEV-only for this demo — see the matching comment at the top of
+# terraform-plan.yml for why there is no environment dropdown here.
+
 on:
   push:
     branches: [main]
@@ -10,16 +13,6 @@ on:
       - "manifest.yml"
       - ".github/workflows/terraform-apply.yml"
   workflow_dispatch:
-    inputs:
-      environment:
-        description: "Environment to deploy (dev, qa, prod)"
-        required: true
-        default: "dev"
-        type: choice
-        options:
-          - dev
-          - qa
-          - prod
 
 permissions:
   contents: read
@@ -35,7 +28,7 @@ jobs:
     env:
       TF_VAR_snowflake_organization_name: xygpmhm
       TF_VAR_snowflake_account_name: gq04150
-      TARGET_ENV: ${{ github.event.inputs.environment || 'dev' }}
+      TARGET_ENV: dev
 
     steps:
       - name: Checkout
