@@ -1,96 +1,121 @@
-# One-time creation of a service user trusting GitHub's OIDC issuer.
-# SUBJECT is an exact match (Snowflake does not support wildcards here,
-# unlike AWS IAM's StringLike condition) — scoped to push-to-main only,
-# matching the terraform-apply workflow's actual sub claim.
-resource "snowflake_execute" "github_oidc_service_user" {
+# GitHub Environment-scoped OIDC identities — one per engine (Terraform vs. DCM) per
+# environment, matching the client workshop slides ("iQ - IaC Setup on Snowflake -
+# Workshop 2 - Updated.pptx", Identity and Configuration Isolation) and the
+# GITHUB_<ENV>_<ENGINE>_SVC naming convention used across the other reference repos.
+#
+# The SUBJECT claim is scoped to the GitHub Environment name (`environment:DEV-Terraform`,
+# `environment:DEV-DCM`), not to a branch/event. This is deliberate: it decouples
+# environment from branch, which trunk-based development (single `main` branch promoted
+# through DEV/TEST/UAT/PROD) requires — a branch/event-scoped subject can't distinguish
+# "this run is deploying to TEST" from "this run is deploying to PROD" when every
+# environment deploys from the same branch. GitHub Environment protection rules (required
+# reviewers, branch restrictions) become the per-environment gate instead.
+#
+# One identity per engine per environment is also enough now — unlike the old
+# branch/event-scoped design, plan and deploy jobs for the same environment share the same
+# GitHub Environment (and therefore the same subject claim), so a separate *_PLAN_SVC
+# identity is no longer needed.
+
+resource "snowflake_execute" "github_dev_terraform_service_user" {
   provider = snowflake.useradmin
 
   execute = <<-SQL
-    CREATE USER IF NOT EXISTS GITHUB_OIDC_TERRAFORM_SVC
+    CREATE USER IF NOT EXISTS GITHUB_DEV_TERRAFORM_SVC
       TYPE = SERVICE
-      COMMENT = 'GitHub Actions OIDC identity for terraform-apply.yml (push to main)'
+      COMMENT = 'GitHub Actions OIDC identity for the DEV-Terraform environment (plan + apply)'
       WORKLOAD_IDENTITY = (
         TYPE = OIDC
         ISSUER = 'https://token.actions.githubusercontent.com'
-        SUBJECT = 'repo:radhasgrl@43290275/snowflake-platform-tf@1351137236:ref:refs/heads/main'
+        SUBJECT = 'repo:radhasgrl@43290275/snowflake-platform-tf@1351137236:environment:DEV-Terraform'
       )
   SQL
 
-  revert = "DROP USER IF EXISTS GITHUB_OIDC_TERRAFORM_SVC"
+  revert = "DROP USER IF EXISTS GITHUB_DEV_TERRAFORM_SVC"
 }
 
-resource "snowflake_grant_account_role" "github_oidc_sysadmin" {
+resource "snowflake_grant_account_role" "github_dev_terraform_sysadmin" {
   provider  = snowflake.useradmin
   role_name = "SYSADMIN"
-  user_name = "GITHUB_OIDC_TERRAFORM_SVC"
+  user_name = "GITHUB_DEV_TERRAFORM_SVC"
 
-  depends_on = [snowflake_execute.github_oidc_service_user]
+  depends_on = [snowflake_execute.github_dev_terraform_service_user]
 }
 
-resource "snowflake_grant_account_role" "github_oidc_useradmin" {
+resource "snowflake_grant_account_role" "github_dev_terraform_useradmin" {
   provider  = snowflake.useradmin
   role_name = "USERADMIN"
-  user_name = "GITHUB_OIDC_TERRAFORM_SVC"
+  user_name = "GITHUB_DEV_TERRAFORM_SVC"
 
-  depends_on = [snowflake_execute.github_oidc_service_user]
+  depends_on = [snowflake_execute.github_dev_terraform_service_user]
 }
 
-resource "snowflake_grant_account_role" "github_oidc_securityadmin" {
+resource "snowflake_grant_account_role" "github_dev_terraform_securityadmin" {
   provider  = snowflake.useradmin
   role_name = "SECURITYADMIN"
-  user_name = "GITHUB_OIDC_TERRAFORM_SVC"
+  user_name = "GITHUB_DEV_TERRAFORM_SVC"
 
-  depends_on = [snowflake_execute.github_oidc_service_user]
+  depends_on = [snowflake_execute.github_dev_terraform_service_user]
 }
 
-# Second service user for terraform-plan.yml (pull_request-triggered runs).
-# Snowflake's WORKLOAD_IDENTITY subject match is exact (no wildcards), and
-# GitHub issues a different sub claim for pull_request vs push events, so
-# plan cannot reuse the apply identity above — confirmed empirically via a
-# temporary debug step against a real PR run.
-# NOTE: privilege scope is intentionally the same as the apply user for now
-# (SYSADMIN/USERADMIN/SECURITYADMIN) — "read-only" is enforced by this
-# identity only ever being used by `terraform plan` (which never issues
-# mutating SQL) and by the exact subject-claim scoping to pull_request runs
-# only. A narrower, privilege-restricted custom role is a possible future
-# hardening step but isn't implemented here.
-resource "snowflake_execute" "github_oidc_plan_service_user" {
+resource "snowflake_execute" "github_dev_dcm_service_user" {
   provider = snowflake.useradmin
 
   execute = <<-SQL
-    CREATE USER IF NOT EXISTS GITHUB_OIDC_TERRAFORM_PLAN_SVC
+    CREATE USER IF NOT EXISTS GITHUB_DEV_DCM_SVC
       TYPE = SERVICE
-      COMMENT = 'GitHub Actions OIDC identity for terraform-plan.yml (pull_request)'
+      COMMENT = 'GitHub Actions OIDC identity for the DEV-DCM environment (plan + deploy)'
       WORKLOAD_IDENTITY = (
         TYPE = OIDC
         ISSUER = 'https://token.actions.githubusercontent.com'
-        SUBJECT = 'repo:radhasgrl@43290275/snowflake-platform-tf@1351137236:pull_request'
+        SUBJECT = 'repo:radhasgrl@43290275/snowflake-platform-tf@1351137236:environment:DEV-DCM'
       )
   SQL
 
-  revert = "DROP USER IF EXISTS GITHUB_OIDC_TERRAFORM_PLAN_SVC"
+  revert = "DROP USER IF EXISTS GITHUB_DEV_DCM_SVC"
 }
 
-resource "snowflake_grant_account_role" "github_oidc_plan_sysadmin" {
+resource "snowflake_grant_account_role" "github_dev_dcm_sysadmin" {
   provider  = snowflake.useradmin
   role_name = "SYSADMIN"
-  user_name = "GITHUB_OIDC_TERRAFORM_PLAN_SVC"
+  user_name = "GITHUB_DEV_DCM_SVC"
 
-  depends_on = [snowflake_execute.github_oidc_plan_service_user]
+  depends_on = [snowflake_execute.github_dev_dcm_service_user]
 }
 
-resource "snowflake_grant_account_role" "github_oidc_plan_useradmin" {
+resource "snowflake_grant_account_role" "github_dev_dcm_useradmin" {
   provider  = snowflake.useradmin
   role_name = "USERADMIN"
-  user_name = "GITHUB_OIDC_TERRAFORM_PLAN_SVC"
+  user_name = "GITHUB_DEV_DCM_SVC"
 
-  depends_on = [snowflake_execute.github_oidc_plan_service_user]
+  depends_on = [snowflake_execute.github_dev_dcm_service_user]
 }
 
-resource "snowflake_grant_account_role" "github_oidc_plan_securityadmin" {
+resource "snowflake_grant_account_role" "github_dev_dcm_securityadmin" {
   provider  = snowflake.useradmin
   role_name = "SECURITYADMIN"
-  user_name = "GITHUB_OIDC_TERRAFORM_PLAN_SVC"
+  user_name = "GITHUB_DEV_DCM_SVC"
 
-  depends_on = [snowflake_execute.github_oidc_plan_service_user]
+  depends_on = [snowflake_execute.github_dev_dcm_service_user]
+}
+
+# dbt identity — deliberately least-privilege, unlike the two identities above. This user
+# gets no admin role grants from Terraform at all; DCM grants it only the
+# DEV_CUSTOMER_DBT_SERVICE_PRSN persona role it actually needs (see
+# sources/definitions/grants.sql), demonstrating the tiered RBAC model in practice for a
+# real downstream workload (Repo 3, customer-domain-dbt).
+resource "snowflake_execute" "github_dev_dbt_service_user" {
+  provider = snowflake.useradmin
+
+  execute = <<-SQL
+    CREATE USER IF NOT EXISTS GITHUB_DEV_DBT_SVC
+      TYPE = SERVICE
+      COMMENT = 'GitHub Actions OIDC identity for customer-domain-dbt (Repo 3) — least-privilege, scoped to DEV_CUSTOMER_DBT_SERVICE_PRSN only'
+      WORKLOAD_IDENTITY = (
+        TYPE = OIDC
+        ISSUER = 'https://token.actions.githubusercontent.com'
+        SUBJECT = 'repo:radhasgrl@43290275/customer-domain-dbt@1405522917:environment:DEV-dbt'
+      )
+  SQL
+
+  revert = "DROP USER IF EXISTS GITHUB_DEV_DBT_SVC"
 }

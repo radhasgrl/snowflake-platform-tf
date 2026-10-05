@@ -1,0 +1,15 @@
+# NOTE: @platform-team / @data-engineering-team are illustrative placeholders (matching the
+# workshop material's convention — see MDP_Platform_Engineering_CICD_IaC_Repo_Architecture_v0.1.md
+# §2.8 "Confirm final GitHub organisation/team structure"). Replace with real GitHub teams or
+# usernames before these entries actually route PR reviews.
+
+# Platform team owns the Terraform account/platform layer and workflow orchestration
+*.tf                     @platform-team
+/manifest.yml            @platform-team
+/.github/                @platform-team
+
+# Data engineering owns the DCM-managed database object layer
+/sources/                @data-engineering-team
+
+# Everyone reviews shared documentation
+*.md                      @platform-team @data-engineering-team

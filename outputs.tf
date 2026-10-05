@@ -1,37 +1,21 @@
-output "landing_db_name" {
-  value = snowflake_database.landing.name
+# Databases, schemas, warehouses, functional roles, grants and placeholder masking/row-access
+# policies moved to DCM (see sources/definitions/) — their outputs moved with them. Terraform's
+# remaining scope is the account/platform layer: the GitHub OIDC service identities below.
+# One identity per engine per environment — see oidc_service_user.tf for why the old
+# separate *_PLAN_SVC identities are no longer needed.
+
+output "dev_terraform_oidc_user" {
+  value = "GITHUB_DEV_TERRAFORM_SVC"
 }
 
-output "analytics_db_name" {
-  value = snowflake_database.analytics.name
+output "dev_dcm_oidc_user" {
+  value = "GITHUB_DEV_DCM_SVC"
 }
 
-output "common_db_name" {
-  value = snowflake_database.common.name
+output "dev_dbt_oidc_user" {
+  value = "GITHUB_DEV_DBT_SVC"
 }
 
-output "ingest_warehouse_name" {
-  value = snowflake_warehouse.ingest.name
-}
-
-output "transform_warehouse_name" {
-  value = snowflake_warehouse.transform.name
-}
-
-output "reporting_warehouse_name" {
-  value = snowflake_warehouse.reporting.name
-}
-
-output "functional_role_names" {
-  value = {
-    for role_name, role in snowflake_account_role.functional : role_name => role.name
-  }
-}
-
-output "placeholder_masking_policy_name" {
-  value = snowflake_masking_policy.placeholder_varchar.name
-}
-
-output "placeholder_row_access_policy_name" {
-  value = snowflake_row_access_policy.placeholder_allow_all.name
+output "dev_admin_db_name" {
+  value = snowflake_database.admin.name
 }
