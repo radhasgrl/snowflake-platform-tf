@@ -128,6 +128,11 @@ jobs:
             --default \
             --no-interactive
 
+      # `snow dcm plan`/`deploy` require the DCM Project object itself to already exist —
+      # --if-not-exists makes this safe to run on every plan, including the very first one.
+      - name: Create DCM project (idempotent)
+        run: snow dcm create --target DEV --if-not-exists
+
       - name: DCM Plan
         id: dcm_plan
         run: snow dcm plan --target DEV 2>&1 | tee dcm_plan_output.txt

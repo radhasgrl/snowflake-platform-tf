@@ -105,5 +105,11 @@ jobs:
             --default \
             --no-interactive
 
+      # `snow dcm deploy`/`plan` require the DCM Project object itself to already exist —
+      # unlike `CREATE USER IF NOT EXISTS`-style idempotency elsewhere, DCM has a separate
+      # create step. --if-not-exists makes this safe to run on every deploy.
+      - name: Create DCM project (idempotent)
+        run: snow dcm create --target DEV --if-not-exists
+
       - name: DCM Deploy
         run: snow dcm deploy --target DEV
