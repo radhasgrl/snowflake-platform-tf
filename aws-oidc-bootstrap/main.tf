@@ -85,6 +85,19 @@ resource "aws_iam_role_policy" "ingestion_infra_management" {
           "s3:GetBucketLocation",
           "s3:GetEncryptionConfiguration",
           "s3:ListBucket",
+          # Additional read-only attributes the AWS provider refreshes on every plan/import
+          # for an aws_s3_bucket resource, even when the attribute isn't set on the bucket.
+          "s3:GetBucketPolicy",
+          "s3:GetBucketAcl",
+          "s3:GetBucketCORS",
+          "s3:GetBucketLogging",
+          "s3:GetBucketObjectLockConfiguration",
+          "s3:GetBucketTagging",
+          "s3:GetBucketWebsite",
+          "s3:GetReplicationConfiguration",
+          "s3:GetLifecycleConfiguration",
+          "s3:GetAccelerateConfiguration",
+          "s3:GetBucketRequestPayment",
         ]
         Resource = "arn:aws:s3:::data-ingestion-raw-525218385225"
       },
@@ -113,6 +126,15 @@ resource "aws_iam_role_policy" "ingestion_infra_management" {
         Effect   = "Allow"
         Action   = ["iam:GetOpenIDConnectProvider"]
         Resource = aws_iam_openid_connect_provider.github_actions.arn
+      },
+      {
+        # The aws_iam_openid_connect_provider data source resolves the provider by URL via
+        # ListOpenIDConnectProviders before reading it — this action only supports the "*"
+        # resource (no ARN-level scoping exists for it in IAM).
+        Sid      = "ListSharedOidcProviders"
+        Effect   = "Allow"
+        Action   = ["iam:ListOpenIDConnectProviders"]
+        Resource = "*"
       }
     ]
   })
