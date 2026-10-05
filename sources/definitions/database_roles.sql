@@ -15,6 +15,8 @@ DEFINE DATABASE ROLE DEV_CUSTOMER_DB.STAGING_SCRL_W
 
 DEFINE DATABASE ROLE DEV_CUSTOMER_DB.MARTS_SCRL_R
   COMMENT = 'Tier 3 database role: read-only on CUSTOMER.MARTS';
+DEFINE DATABASE ROLE DEV_CUSTOMER_DB.MARTS_SCRL_W
+  COMMENT = 'Tier 3 database role: read-write on CUSTOMER.MARTS (includes read) - dbt builds dim_customers here';
 
 DEFINE DATABASE ROLE DEV_CUSTOMER_DB.SHARED_SCRL_R
   COMMENT = 'Tier 3 database role: read-only on CUSTOMER.SHARED (shared UDFs/procedures)';
