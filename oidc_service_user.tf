@@ -136,3 +136,25 @@ resource "snowflake_execute" "github_dev_dbt_service_user" {
 
   revert = "DROP USER IF EXISTS GITHUB_DEV_DBT_SVC"
 }
+
+# Ingestion identity (Repo 2, data-ingestion-raw) — same least-privilege pattern as the dbt
+# identity above. DCM grants it DEV_CUSTOMER_INGEST_SERVICE_PRSN only (see
+# sources/definitions/grants.sql), which in turn only carries DEV_CUSTOMER_INGEST_FNCRL —
+# enough to create/manage the storage integration, stage, file format and pipe, and load
+# into RAW, nothing more.
+resource "snowflake_execute" "github_dev_ingest_service_user" {
+  provider = snowflake.useradmin
+
+  execute = <<-SQL
+    CREATE USER IF NOT EXISTS GITHUB_DEV_INGEST_SVC
+      TYPE = SERVICE
+      COMMENT = 'GitHub Actions OIDC identity for data-ingestion-raw (Repo 2) — least-privilege, scoped to DEV_CUSTOMER_INGEST_SERVICE_PRSN only'
+      WORKLOAD_IDENTITY = (
+        TYPE = OIDC
+        ISSUER = 'https://token.actions.githubusercontent.com'
+        SUBJECT = 'repo:radhasgrl@43290275/data-ingestion-raw@1405785591:environment:DEV-Ingest'
+      )
+  SQL
+
+  revert = "DROP USER IF EXISTS GITHUB_DEV_INGEST_SVC"
+}

@@ -23,6 +23,9 @@ DEFINE ROLE DEV_CUSTOMER_DATA_CONSUMER_PRSN
 DEFINE ROLE DEV_CUSTOMER_DBT_SERVICE_PRSN
   COMMENT = 'Tier 1 persona: the dbt service identity (Repo 3, customer-domain-dbt) that runs Customer domain transformations';
 
+DEFINE ROLE DEV_CUSTOMER_INGEST_SERVICE_PRSN
+  COMMENT = 'Tier 1 persona: the Snowpipe ingestion service identity (Repo 2, data-ingestion-raw) that loads Customer domain RAW data';
+
 -- Tier 2: functional roles — capability-oriented, composed from Tier 3 (database) and
 -- Tier 4 (warehouse) roles in grants.sql
 DEFINE ROLE DEV_CUSTOMER_INGEST_FNCRL
