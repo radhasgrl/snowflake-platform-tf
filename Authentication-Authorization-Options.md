@@ -163,7 +163,7 @@ DataOps extends authorization across environments, not just within one account:
 The pipeline's own IAM identity (`terraform-platform-svc`) was deliberately never
 granted IAM write access. The OIDC provider and role were applied once by a
 human with elevated AWS access via CloudShell, using Terraform code committed
-to [aws-oidc-bootstrap/](aws-oidc-bootstrap) for review and reproducibility —
+to [bootstrap/oidc-identity/](bootstrap/oidc-identity) for review and reproducibility —
 mirroring how a platform/security team would own this in a real enterprise
 engagement (see [OIDC Migration Readiness](#oidc-migration-readiness) below).
 
