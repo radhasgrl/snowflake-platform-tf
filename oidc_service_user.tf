@@ -20,7 +20,7 @@ resource "snowflake_execute" "github_dev_terraform_service_user" {
   provider = snowflake.useradmin
 
   execute = <<-SQL
-    CREATE OR ALTER USER GITHUB_DEV_TERRAFORM_SVC
+    CREATE USER IF NOT EXISTS GITHUB_DEV_TERRAFORM_SVC
       TYPE = SERVICE
       COMMENT = 'GitHub Actions OIDC identity for the DEV-Terraform environment (plan + apply)'
       WORKLOAD_IDENTITY = (
@@ -114,7 +114,7 @@ resource "snowflake_execute" "github_dev_dbt_service_user" {
   provider = snowflake.useradmin
 
   execute = <<-SQL
-    CREATE OR ALTER USER GITHUB_DEV_DBT_SVC
+    CREATE USER IF NOT EXISTS GITHUB_DEV_DBT_SVC
       TYPE = SERVICE
       COMMENT = 'GitHub Actions OIDC identity for customer-domain-dbt (Repo 3) — least-privilege, scoped to DEV_CUSTOMER_DBT_SERVICE_PRSN only'
       WORKLOAD_IDENTITY = (
