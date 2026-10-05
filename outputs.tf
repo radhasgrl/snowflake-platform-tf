@@ -19,3 +19,19 @@ output "dev_dbt_oidc_user" {
 output "dev_admin_db_name" {
   value = snowflake_database.admin.name
 }
+
+# Ingestion AWS infra (ingestion_aws_infra.tf) — migrated here from Repo 2's standalone
+# aws/ Terraform root via `terraform import`.
+output "ingestion_bucket_name" {
+  value = aws_s3_bucket.ingestion_raw.bucket
+}
+
+output "ingestion_github_actions_role_arn" {
+  value       = aws_iam_role.github_actions_ingestion.arn
+  description = "Referenced by data-ingestion-raw's own workflows as role-to-assume"
+}
+
+output "ingestion_snowflake_storage_integration_role_arn" {
+  value       = aws_iam_role.snowflake_storage_integration.arn
+  description = "Referenced by data-ingestion-raw's sql/02_storage_integration.sql as STORAGE_AWS_ROLE_ARN"
+}

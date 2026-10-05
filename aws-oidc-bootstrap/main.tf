@@ -61,3 +61,59 @@ resource "aws_iam_role_policy" "terraform_state_access" {
     ]
   })
 }
+
+# Expands this same CI role's permissions so it can also manage the ingestion-domain AWS
+# resources defined in the main module's ingestion_aws_infra.tf (migrated from Repo 2's
+# standalone aws/ Terraform root — see that file's header comment). Narrowly scoped to the
+# exact resource names/ARNs involved, not a blanket S3/IAM grant, to keep this identity's
+# blast radius limited to the resources it's actually meant to manage.
+resource "aws_iam_role_policy" "ingestion_infra_management" {
+  name = "ingestion-aws-infra-management"
+  role = aws_iam_role.github_actions_terraform.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "ManageIngestionBucket"
+        Effect = "Allow"
+        Action = [
+          "s3:CreateBucket",
+          "s3:DeleteBucket",
+          "s3:GetBucketVersioning",
+          "s3:PutBucketVersioning",
+          "s3:GetBucketLocation",
+          "s3:GetEncryptionConfiguration",
+          "s3:ListBucket",
+        ]
+        Resource = "arn:aws:s3:::data-ingestion-raw-525218385225"
+      },
+      {
+        Sid    = "ManageIngestionRoles"
+        Effect = "Allow"
+        Action = [
+          "iam:CreateRole",
+          "iam:GetRole",
+          "iam:DeleteRole",
+          "iam:TagRole",
+          "iam:UpdateAssumeRolePolicy",
+          "iam:PutRolePolicy",
+          "iam:GetRolePolicy",
+          "iam:DeleteRolePolicy",
+          "iam:ListRolePolicies",
+          "iam:ListAttachedRolePolicies",
+        ]
+        Resource = [
+          "arn:aws:iam::525218385225:role/data-ingestion-raw-github-oidc",
+          "arn:aws:iam::525218385225:role/data-ingestion-raw-snowflake-storage-integration",
+        ]
+      },
+      {
+        Sid      = "ReadSharedOidcProvider"
+        Effect   = "Allow"
+        Action   = ["iam:GetOpenIDConnectProvider"]
+        Resource = aws_iam_openid_connect_provider.github_actions.arn
+      }
+    ]
+  })
+}

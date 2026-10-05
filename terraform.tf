@@ -6,6 +6,10 @@ terraform {
       source  = "snowflakedb/snowflake"
       version = "~> 2.0"
     }
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
   }
 
   # Backend is partially configured here; bucket/key/region are supplied per
