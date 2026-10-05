@@ -9,7 +9,7 @@
 # destroy+recreate) — same bucket, same IAM roles, same ARNs, zero resource disruption.
 # See data-ingestion-raw's git history (aws/main.tf, now deleted) for the original.
 
-# GitHub's OIDC provider is one-per-AWS-account — already created by aws-oidc-bootstrap/.
+# GitHub's OIDC provider is one-per-AWS-account — already created by bootstrap/oidc-identity/.
 data "aws_iam_openid_connect_provider" "github_actions" {
   url = "https://token.actions.githubusercontent.com"
 }

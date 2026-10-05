@@ -32,8 +32,8 @@ Navigate to `github.com/radhasgrl/snowflake-platform-tf` and walk through:
 Walk through files in this order:
 
 ```
-bootstrap/                    →  "One-time setup — creates the S3 state bucket in Sydney (ap-southeast-2)"
-aws-oidc-bootstrap/            →  "One-time, human-applied — creates the AWS OIDC provider + IAM role"
+bootstrap/state-backend/      →  "One-time setup — creates the S3 state bucket in Sydney (ap-southeast-2)"
+bootstrap/oidc-identity/      →  "One-time, human-applied — creates the AWS OIDC provider + IAM role"
 
 terraform.tf                  →  "Version pin + partial S3 backend — state is remote, encrypted, versioned"
 providers.tf                  →  "Three provider aliases, all hardcoded to GitHub OIDC workload identity — no key-pair fallback anywhere in the repo"

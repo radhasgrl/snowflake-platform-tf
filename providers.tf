@@ -56,8 +56,8 @@ provider "snowflake" {
 
 # AWS provider — for ingestion_aws_infra.tf (Repo 2's S3 bucket + IAM roles). Authenticates
 # via the same GitHub OIDC role (snowflake-platform-tf-github-oidc) this repo's CI already
-# uses for Terraform state access; aws-oidc-bootstrap/ grants it the additional, narrowly
-# scoped permissions needed to manage these specific ingestion resources.
+# uses for Terraform state access; bootstrap/oidc-identity/ grants it the additional,
+# narrowly scoped permissions needed to manage these specific ingestion resources.
 provider "aws" {
   region = "ap-southeast-2"
 }

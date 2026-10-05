@@ -2,9 +2,10 @@
 
 A fully automated Snowflake DataOps platform managed through **Terraform** (account/platform
 layer) and **Snowflake DCM** (database object layer), with CI/CD via GitHub Actions and
-Terraform remote state in AWS S3. This is Repo 1 ("infra-snowflake") of a 3-repo client demo;
-see `MDP_Platform_Engineering_CICD_IaC_Repo_Architecture_v0.1.md` for the full repo structure
-(Repo 2: Snowpipe ingestion into RAW; Repo 3: `sadp-dbt` + `domain-customer-dbt`).
+Terraform remote state in AWS S3. This is Repo 1 (`snowflake-platform-tf`) of a 3-repo client
+demo; see `MDP_Platform_Engineering_CICD_IaC_Repo_Architecture_v0.1.md` for the full repo
+structure (Repo 2: `data-ingestion-raw` — Snowpipe ingestion into RAW; Repo 3:
+`customer-domain-dbt` — dbt transformations for the Customer domain).
 
 ---
 
@@ -73,15 +74,33 @@ Snowflake Account: xygpmhm-gq04150
 
 ## Folder Structure
 
+This repo contains **3 separate Terraform root modules** (each with its own state, its own
+`variables.tf`/`outputs.tf`), plus the DCM project. This isn't duplication — each one solves
+a distinct, one-time bootstrapping problem that has to exist before the next can run:
+
 ```
 .
+├── bootstrap/                        # One-time, human-applied — never touched by CI
+│   ├── state-backend/                # Root module #1: creates the S3 bucket this repo's
+│   │   │                             #   OWN remote backend needs to exist before it can
+│   │   │                             #   be configured. Must run before anything else.
+│   │   ├── main.tf, variables.tf, outputs.tf, versions.tf
+│   │   └── terraform.tfstate         # LOCAL state (there's no backend yet to point to)
+│   └── oidc-identity/                # Root module #2: creates the GitHub OIDC trust + CI
+│       │                             #   IAM role that CI itself needs to authenticate to
+│       │                             #   AWS. Can't bootstrap a pipeline's own permissions
+│       │                             #   using that same pipeline.
+│       ├── main.tf, variables.tf, outputs.tf, versions.tf
+│       └── terraform.tfstate         # LOCAL state, same reason as above
+│
 ├── .github/
 │   ├── CODEOWNERS                   # *.tf -> platform; /sources/ -> data engineering
 │   ├── pull_request_template.md     # Layer(s) Affected + validation checklist
 │   └── workflows/
 │       ├── terraform-plan.yml      # plan job (Terraform) + dcm-plan job (DCM, parallel), on Pull Requests
 │       └── terraform-apply.yml     # apply job (Terraform) + dcm-deploy job (DCM, needs: apply), on merge to main
-├── manifest.yml                     # DCM project manifest (targets, account identifier)
+│
+├── manifest.yml                      # DCM project manifest (targets, account identifier)
 ├── sources/
 │   └── definitions/                 # DCM SQL definitions — database object layer
 │       ├── databases.sql
@@ -92,19 +111,30 @@ Snowflake Account: xygpmhm-gq04150
 │       ├── grants.sql               # wires Tier 3/4 -> Tier 2 -> Tier 1
 │       ├── masking.sql
 │       ├── row_access.sql
-│       └── tables.sql               # RAW.CUSTOMERS — loaded by Repo 2 (data-ingestion-raw), read by Repo 3a (sadp-dbt)
-├── oidc_service_user.tf             # Terraform — GitHub OIDC identities (Terraform + DCM engines)
-├── dcm_home.tf                      # Terraform — DEV_ADMIN_DB.DCM, the DCM project's own home
-├── removed.tf                       # Terraform — one-time `removed` blocks for the DCM cutover
+│       └── tables.sql               # RAW.CUSTOMERS — loaded by Repo 2 (data-ingestion-raw), read by Repo 3 (customer-domain-dbt)
+│
+├── oidc_service_user.tf             # Root module #3 (below) — GitHub OIDC identities (Terraform, DCM, dbt, ingestion engines)
+├── dcm_home.tf                      #   — DEV_ADMIN_DB.DCM, the DCM project's own home
+├── ingestion_aws_infra.tf           #   — Repo 2's S3 bucket + IAM roles (provisioned here, not in Repo 2)
+├── removed.tf                       #   — one-time `removed` blocks for the DCM cutover
 ├── context.tf, providers.tf, terraform.tf, variables.tf, outputs.tf
+│                                     # Root module #3: the ONGOING, CI-managed Terraform —
+│                                     #   everything above this line changes repeatedly and
+│                                     #   is deployed by terraform-apply.yml on every merge
 ├── env/
 │   ├── dev/ (backend.hcl, dev.tfvars)
-│   ├── qa/
-│   └── prod/
+│   ├── qa/                          # scaffolded, not yet wired into any pipeline
+│   └── prod/                        # scaffolded, not yet wired into any pipeline
+│
 ├── .gitignore
 ├── .terraform-version              # Pins Terraform to 1.16.0
 └── README.md
 ```
+
+**Quick way to tell the 3 roots apart**: `bootstrap/state-backend/` and `bootstrap/oidc-identity/`
+are each applied **once, by hand**, with local state, and never run by CI. Everything at repo
+root (`variables.tf`, `outputs.tf`, `*.tf`, `manifest.yml`, `sources/`) is the **ongoing** root
+module — remote (S3) state, deployed automatically by CI on every merge to `main`.
 
 ---
 
@@ -199,7 +229,7 @@ aws configure
 ### Mandatory notes
 - The public key pasted into Snowflake must have the `-----BEGIN PUBLIC KEY-----` / `-----END PUBLIC KEY-----` lines **removed** — paste only the base64 body.
 - The private key file (`.p8`) must **never be committed** to git — it is covered by `.gitignore`.
-- Three provider aliases in `terraform/foundation/providers.tf` each use a different Snowflake role to enforce least-privilege:
+- Three provider aliases in `providers.tf` (repo root) each use a different Snowflake role to enforce least-privilege:
   - Default provider → `SYSADMIN` (databases, schemas, warehouses)
   - `snowflake.useradmin` → role and user management
   - `snowflake.securityadmin` → masking and row access policies
@@ -217,38 +247,32 @@ aws configure
 | Bucket encryption | AES256 server-side encryption |
 | Public access | All public access blocked |
 | State locking | `use_lockfile = true` in S3 backend (no DynamoDB needed) |
-| State file location | `s3://snowflake-platform-tf-state-525218385225/foundation/terraform.tfstate` |
+| State file location | `s3://snowflake-platform-tf-state-525218385225/workload/dev/terraform.tfstate` |
 
 ### How it was done
 
 The bootstrap module uses a **local** Terraform state (intentionally — it bootstraps the remote backend).
 
 ```powershell
-cd terraform/bootstrap
+cd bootstrap/state-backend
 terraform init
 terraform apply -auto-approve
 ```
 
-`terraform/foundation/versions.tf` was then updated to use the S3 backend:
+The repo root's `terraform.tf` then uses that S3 backend via `env/dev/backend.hcl`:
 
 ```hcl
-backend "s3" {
-  bucket       = "snowflake-platform-tf-state-525218385225"
-  key          = "foundation/terraform.tfstate"
-  region       = "ap-southeast-2"
-  encrypt      = true
-  use_lockfile = true
-}
+backend "s3" {}   # bucket/key/region supplied per-environment via -backend-config
 ```
 
 ```powershell
-cd terraform/foundation
-terraform init   # initialises the remote S3 backend
+# from the repo root
+terraform init -backend-config="env/dev/backend.hcl"
 ```
 
 ### Mandatory notes
-- The bootstrap must be run **once only** before using the foundation module.
-- The bootstrap state (`terraform/bootstrap/terraform.tfstate`) is local and **not** pushed to git (covered by `.gitignore`).
+- The bootstrap must be run **once only** before using the root module.
+- The bootstrap state (`bootstrap/state-backend/terraform.tfstate`) is local and **not** pushed to git (covered by `.gitignore`).
 - The S3 bucket was originally created in `eu-west-1` and later migrated to `ap-southeast-2` to align with the client's AWS region.
 
 ---
