@@ -60,17 +60,10 @@ resource "snowflake_grant_account_role" "github_dev_terraform_securityadmin" {
 resource "snowflake_execute" "github_dev_dcm_service_user" {
   provider = snowflake.useradmin
 
-  # DEFAULT_ROLE/DEFAULT_SECONDARY_ROLES = ('ALL') matter here specifically: DCM runs as a
-  # single Snowflake session (unlike Terraform, which uses three separate per-role provider
-  # blocks), but still needs to create objects across all three privilege domains in that
-  # one session — databases/schemas/warehouses (SYSADMIN), roles (USERADMIN), and masking/
-  # row-access policies (SECURITYADMIN). Secondary roles make all three active at once.
   execute = <<-SQL
-    CREATE OR ALTER USER GITHUB_DEV_DCM_SVC
+    CREATE USER IF NOT EXISTS GITHUB_DEV_DCM_SVC
       TYPE = SERVICE
       COMMENT = 'GitHub Actions OIDC identity for the DEV-DCM environment (plan + deploy)'
-      DEFAULT_ROLE = SYSADMIN
-      DEFAULT_SECONDARY_ROLES = ('ALL')
       WORKLOAD_IDENTITY = (
         TYPE = OIDC
         ISSUER = 'https://token.actions.githubusercontent.com'
@@ -79,6 +72,23 @@ resource "snowflake_execute" "github_dev_dcm_service_user" {
   SQL
 
   revert = "DROP USER IF EXISTS GITHUB_DEV_DCM_SVC"
+}
+
+# Separate from the CREATE above so that setting/changing these properties never forces a
+# destroy+recreate of the user itself ("CREATE OR ALTER USER" is not valid Snowflake syntax —
+# the OR ALTER combinator isn't supported for USER objects). DEFAULT_ROLE/
+# DEFAULT_SECONDARY_ROLES = ('ALL') matter here specifically: DCM runs as a single Snowflake
+# session (unlike Terraform, which uses three separate per-role provider blocks), but still
+# needs to create objects across all three privilege domains in that one session —
+# databases/schemas/warehouses (SYSADMIN), roles (USERADMIN), and masking/row-access
+# policies (SECURITYADMIN). Secondary roles make all three active at once.
+resource "snowflake_execute" "github_dev_dcm_service_user_defaults" {
+  provider = snowflake.useradmin
+
+  execute = "ALTER USER GITHUB_DEV_DCM_SVC SET DEFAULT_ROLE = SYSADMIN, DEFAULT_SECONDARY_ROLES = ('ALL')"
+  revert  = "ALTER USER GITHUB_DEV_DCM_SVC UNSET DEFAULT_ROLE, DEFAULT_SECONDARY_ROLES"
+
+  depends_on = [snowflake_execute.github_dev_dcm_service_user]
 }
 
 resource "snowflake_grant_account_role" "github_dev_dcm_sysadmin" {
