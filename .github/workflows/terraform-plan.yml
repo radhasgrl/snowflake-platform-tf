@@ -117,6 +117,17 @@ jobs:
         with:
           use-oidc: true
 
+      - name: Create default Snowflake CLI connection (OIDC)
+        run: |
+          snow connection add \
+            --connection-name github \
+            --account "$SNOWFLAKE_ACCOUNT" \
+            --user "$SNOWFLAKE_USER" \
+            --authenticator WORKLOAD_IDENTITY \
+            --workload-identity-provider OIDC \
+            --default \
+            --no-interactive
+
       - name: DCM Plan
         id: dcm_plan
         run: snow dcm plan --target DEV 2>&1 | tee dcm_plan_output.txt
