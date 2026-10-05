@@ -1,5 +1,15 @@
 name: Terraform Plan
 
+# Deliberately DEV-only for this demo. There is no "choose an environment" dropdown here
+# because selecting anything other than DEV would not actually work today: only the
+# DEV-Terraform/DEV-DCM GitHub Environments and GITHUB_DEV_TERRAFORM_SVC/GITHUB_DEV_DCM_SVC
+# OIDC identities exist (oidc_service_user.tf), and manifest.yml only defines a DEV DCM
+# target. `env/qa/` and `env/prod/` are scaffolded Terraform tfvars/backend configs for a
+# future rollout, but are not wired into any pipeline yet — adding TEST/UAT/PROD means
+# repeating this exact pattern per environment: a new GitHub Environment pair, a new OIDC
+# identity pair in oidc_service_user.tf, and a new manifest.yml target, matching the
+# identity-isolation model in MDP_Platform_Engineering_CICD_IaC_Repo_Architecture_v0.1.md §1.
+
 on:
   pull_request:
     branches: [main]
@@ -10,16 +20,6 @@ on:
       - "manifest.yml"
       - ".github/workflows/terraform-plan.yml"
   workflow_dispatch:
-    inputs:
-      environment:
-        description: "Environment to plan (dev, qa, prod)"
-        required: true
-        default: "dev"
-        type: choice
-        options:
-          - dev
-          - qa
-          - prod
 
 permissions:
   contents: read
@@ -36,7 +36,7 @@ jobs:
     env:
       TF_VAR_snowflake_organization_name: xygpmhm
       TF_VAR_snowflake_account_name: gq04150
-      TARGET_ENV: ${{ github.event.inputs.environment || 'dev' }}
+      TARGET_ENV: dev
 
     steps:
       - name: Checkout
@@ -55,6 +55,9 @@ jobs:
         with:
           terraform_version: "1.16.0"
 
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+
       - name: Fetch Snowflake OIDC token
         run: |
           TOKEN=$(curl -sSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
@@ -64,6 +67,9 @@ jobs:
 
       - name: Terraform Init
         run: terraform init -backend-config="env/${{ env.TARGET_ENV }}/backend.hcl"
+
+      - name: Terraform Validate
+        run: terraform validate
 
       - name: Terraform Plan
         id: plan
