@@ -7,10 +7,8 @@ on:
   push:
     branches: [main]
     paths:
-      - "*.tf"
-      - "env/**"
-      - "sources/**"
-      - "manifest.yml"
+      - "terraform/**"
+      - "dcm/**"
       - ".github/workflows/terraform-apply.yml"
   workflow_dispatch:
 
@@ -29,6 +27,10 @@ jobs:
       TF_VAR_snowflake_organization_name: xygpmhm
       TF_VAR_snowflake_account_name: gq04150
       TARGET_ENV: dev
+
+    defaults:
+      run:
+        working-directory: terraform
 
     steps:
       - name: Checkout
@@ -75,6 +77,10 @@ jobs:
       SNOWFLAKE_ACCOUNT: xygpmhm-gq04150
       SNOWFLAKE_USER: GITHUB_DEV_DCM_SVC
       SNOWFLAKE_WORKLOAD_IDENTITY_PROVIDER: OIDC
+
+    defaults:
+      run:
+        working-directory: dcm
 
     steps:
       - name: Checkout

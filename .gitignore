@@ -21,3 +21,9 @@ override.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
+
+# Client workshop decks / architecture reference docs — kept locally for reference, not
+# part of the actual platform codebase, not meant to be tracked or shown in the repo.
+*.pptx
+MDP_Platform_Engineering_CICD_IaC_Repo_Architecture_v0.1.md
+MDP_Platform_Solution_Architecture_v0.3.md

@@ -3,21 +3,20 @@ name: Terraform Plan
 # Deliberately DEV-only for this demo. There is no "choose an environment" dropdown here
 # because selecting anything other than DEV would not actually work today: only the
 # DEV-Terraform/DEV-DCM GitHub Environments and GITHUB_DEV_TERRAFORM_SVC/GITHUB_DEV_DCM_SVC
-# OIDC identities exist (oidc_service_user.tf), and manifest.yml only defines a DEV DCM
-# target. `env/qa/` and `env/prod/` are scaffolded Terraform tfvars/backend configs for a
-# future rollout, but are not wired into any pipeline yet — adding TEST/UAT/PROD means
-# repeating this exact pattern per environment: a new GitHub Environment pair, a new OIDC
-# identity pair in oidc_service_user.tf, and a new manifest.yml target, matching the
-# identity-isolation model in MDP_Platform_Engineering_CICD_IaC_Repo_Architecture_v0.1.md §1.
+# OIDC identities exist (terraform/oidc_service_user.tf), and dcm/manifest.yml only defines
+# a DEV DCM target. `terraform/env/qa/` and `terraform/env/prod/` are scaffolded Terraform
+# tfvars/backend configs for a future rollout, but are not wired into any pipeline yet —
+# adding TEST/UAT/PROD means repeating this exact pattern per environment: a new GitHub
+# Environment pair, a new OIDC identity pair in terraform/oidc_service_user.tf, and a new
+# dcm/manifest.yml target, matching the identity-isolation model in
+# MDP_Platform_Engineering_CICD_IaC_Repo_Architecture_v0.1.md §1.
 
 on:
   pull_request:
     branches: [main]
     paths:
-      - "*.tf"
-      - "env/**"
-      - "sources/**"
-      - "manifest.yml"
+      - "terraform/**"
+      - "dcm/**"
       - ".github/workflows/terraform-plan.yml"
   workflow_dispatch:
 
@@ -37,6 +36,10 @@ jobs:
       TF_VAR_snowflake_organization_name: xygpmhm
       TF_VAR_snowflake_account_name: gq04150
       TARGET_ENV: dev
+
+    defaults:
+      run:
+        working-directory: terraform
 
     steps:
       - name: Checkout
@@ -82,7 +85,7 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const plan = fs.readFileSync('plan_output.txt', 'utf8');
+            const plan = fs.readFileSync('terraform/plan_output.txt', 'utf8');
             const truncated = plan.length > 60000 ? plan.slice(0, 60000) + '\n\n...output truncated' : plan;
             github.rest.issues.createComment({
               issue_number: context.issue.number,
@@ -111,6 +114,10 @@ jobs:
       SNOWFLAKE_ACCOUNT: xygpmhm-gq04150
       SNOWFLAKE_USER: GITHUB_DEV_DCM_SVC
       SNOWFLAKE_WORKLOAD_IDENTITY_PROVIDER: OIDC
+
+    defaults:
+      run:
+        working-directory: dcm
 
     steps:
       - name: Checkout
@@ -151,7 +158,7 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const plan = fs.readFileSync('dcm_plan_output.txt', 'utf8');
+            const plan = fs.readFileSync('dcm/dcm_plan_output.txt', 'utf8');
             const truncated = plan.length > 60000 ? plan.slice(0, 60000) + '\n\n...output truncated' : plan;
             github.rest.issues.createComment({
               issue_number: context.issue.number,

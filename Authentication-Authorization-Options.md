@@ -98,12 +98,12 @@ across environments.
 
 | Mechanism | Purpose | How it's expressed in this repo |
 |---|---|---|
-| **Provider Role Separation** | The pipeline itself uses 3 different Snowflake roles depending on the operation type | `providers.tf` — default `SYSADMIN`, alias `useradmin`, alias `securityadmin` |
-| **Functional Account Roles** | Business-facing roles reflecting job function, not individual people | `roles.tf` — `DEV_DATA_ENGINEER`, `DEV_DATA_ANALYST`, `DEV_DATA_CONSUMER`, `DEV_DBT_RUNNER` |
-| **Role Hierarchy** | Every functional role is granted upward to `SYSADMIN`, so ownership/visibility is never orphaned | `snowflake_grant_account_role.functional_to_sysadmin` |
-| **Grants-as-Code** | Every `USAGE`/`SELECT`/`INSERT` privilege is declared in Terraform, not issued manually | `grants.tf` — warehouse, database, schema, and table-level grants per role |
-| **Column Masking / Row Access Policies** | PII protection and row-level filtering, declared and version-controlled like any other resource | `masking.tf`, `row_access.tf` — currently placeholders, pending client-confirmed rules |
-| **Drift Detection** | Any manual change made outside Terraform is surfaced on the next `terraform plan`, not silently accepted | Built into every CI/CD pipeline run automatically |
+| **Provider Role Separation** | The pipeline itself uses 3 different Snowflake roles depending on the operation type | `terraform/providers.tf` — default `SYSADMIN`, alias `useradmin`, alias `securityadmin` |
+| **Tiered Functional/Access Roles** | Business-facing roles reflecting job function, not individual people — not flat account roles, but a 4-tier hierarchy (persona → functional → database/warehouse roles) | `dcm/sources/definitions/roles.sql`, `database_roles.sql` — e.g. `DEV_CUSTOMER_DATA_ENGINEER_PRSN` → `DEV_CUSTOMER_INGEST_FNCRL` → `DEV_CUSTOMER_DB.RAW_SCRL_R/_W` |
+| **Role Hierarchy** | Every tier is granted upward so ownership/visibility is never orphaned | `dcm/sources/definitions/grants.sql` — wires Tier 3/4 → Tier 2 → Tier 1 |
+| **Grants-as-Code** | Every `USAGE`/`SELECT`/`INSERT` privilege is declared in DCM SQL, not issued manually | `dcm/sources/definitions/grants.sql` — warehouse, database, schema, and table-level grants per role |
+| **Column Masking / Row Access Policies** | PII protection and row-level filtering, declared and version-controlled like any other resource | `dcm/sources/definitions/masking.sql`, `row_access.sql` — currently placeholders, pending client-confirmed rules |
+| **Drift Detection** | Any manual change made outside Terraform/DCM is surfaced on the next `terraform plan`/`snow dcm plan`, not silently accepted | Built into every CI/CD pipeline run automatically |
 
 ---
 
@@ -154,7 +154,7 @@ DataOps extends authorization across environments, not just within one account:
 | Pipeline → AWS (`terraform-plan.yml` + `terraform-apply.yml`) | **OIDC (`AssumeRoleWithWebIdentity`)** via `snowflake-platform-tf-github-oidc` role | No stored AWS secret; matches AWS's recommended pattern for GitHub Actions |
 | Pipeline → Snowflake (`terraform-apply.yml`) | **OIDC (`WORKLOAD_IDENTITY`)** via `GITHUB_OIDC_TERRAFORM_SVC` | No stored private key for the workflow that mutates infrastructure |
 | Pipeline → Snowflake (`terraform-plan.yml`) | **OIDC (`WORKLOAD_IDENTITY`)** via `GITHUB_OIDC_TERRAFORM_PLAN_SVC` | Separate identity required because Snowflake's `SUBJECT` match is exact (no wildcard support like AWS's `StringLike`) — GitHub issues a distinct `sub` claim for `pull_request` vs `push` events, confirmed empirically |
-| Secrets storage | **GitHub Repository Secrets** | `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`SNOWFLAKE_PRIVATE_KEY` are all now unused by every workflow; kept as inert secrets pending a deliberate decision to delete them |
+| Secrets storage | **GitHub Repository Secrets** | Only `AWS_REGION` remains. `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`SNOWFLAKE_PRIVATE_KEY`/`SNOWFLAKE_ACCOUNT` were unused by every workflow and have been deleted |
 | Authorization inside Snowflake | **3 provider role aliases + 4 functional account roles, all grants declared in Terraform** | Least-privilege by function; every permission change is a reviewable diff |
 | Environment strategy | **Single Snowflake account, environment-prefixed objects, per-environment Terraform state** | Matches the client's actual Snowflake trial account topology; ready to extend to `qa`/`prod` without restructuring |
 
@@ -163,7 +163,7 @@ DataOps extends authorization across environments, not just within one account:
 The pipeline's own IAM identity (`terraform-platform-svc`) was deliberately never
 granted IAM write access. The OIDC provider and role were applied once by a
 human with elevated AWS access via CloudShell, using Terraform code committed
-to [bootstrap/oidc-identity/](bootstrap/oidc-identity) for review and reproducibility —
+to [terraform/bootstrap/oidc-identity/](terraform/bootstrap/oidc-identity) for review and reproducibility —
 mirroring how a platform/security team would own this in a real enterprise
 engagement (see [OIDC Migration Readiness](#oidc-migration-readiness) below).
 
@@ -184,7 +184,7 @@ guessing from documentation examples.
 |---|---|
 | ~~Migrate Pipeline → AWS to OIDC~~ | ✅ Done — both workflows |
 | ~~Migrate Pipeline → Snowflake to OIDC~~ | 🟡 Done for `terraform-apply.yml`; `terraform-plan.yml` still pending (needs its own read-only OIDC identity) |
-| **Remove now-unused `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` secrets** | ⬜ Pending — safe to remove, no longer read by either workflow |
+| **Remove now-unused `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` secrets** | ✅ Done — these plus `SNOWFLAKE_PRIVATE_KEY`/`SNOWFLAKE_ACCOUNT` have been deleted; only `AWS_REGION` remains |
 | **Build a genuinely read-only OIDC identity for `terraform-plan.yml`** | ⬜ Pending — matches Snowflake's own documented best practice (separate read-only identity for `plan`, read/write for `apply`) |
 | **Move to GitHub Environment secrets with required reviewers for `prod`** | ⬜ Pending — adds a human approval gate independent of authentication method |
 | **Replace placeholder masking/RLS policies with real client-confirmed rules** | ⬜ Pending — currently no-op; rules pending `Questionnaire.md` answers |
@@ -231,8 +231,8 @@ live.** The checklist below is kept as reference for extending OIDC to
 ## Demo Talking Points
 
 1. **Show the trust chain diagram** — one pipeline run, two independent authentications (AWS + Snowflake), zero human credentials involved.
-2. **Show GitHub Secrets (names only, values hidden)** — point out `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`SNOWFLAKE_PRIVATE_KEY` are all now unused (kept only pending a deliberate cleanup decision) — these are "before OIDC" artifacts, not the live path.
-3. **Show `providers.tf`** — authentication is hardcoded to `WORKLOAD_IDENTITY`/`OIDC` for all 3 role aliases; the only per-workflow knob is `var.snowflake_oidc_user`, selecting the apply vs plan identity — and `roles.tf`, where the pipeline's own Snowflake access is split across 3 roles by operation type, mirroring least-privilege principles a security team will recognize immediately.
+2. **Show GitHub Secrets (names only, values hidden)** — only `AWS_REGION` remains; the old `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`SNOWFLAKE_PRIVATE_KEY`/`SNOWFLAKE_ACCOUNT` "before OIDC" secrets have been deleted — nothing unused left sitting around.
+3. **Show `terraform/providers.tf`** — authentication is hardcoded to `WORKLOAD_IDENTITY`/`OIDC` for all 3 role aliases; the only per-workflow knob is `var.snowflake_oidc_user`, selecting the apply vs plan identity — and `dcm/sources/definitions/roles.sql`, where the pipeline's own Snowflake access is split by operation type across a tiered persona → functional → access role hierarchy, mirroring least-privilege principles a security team will recognize immediately.
 4. **Trigger a live pipeline run** — open a PR, show the plan run's "Fetch Snowflake OIDC token" step succeeding (no private key involved), then merge and show the apply run doing the same — zero stored secrets used in either path.
 5. **Close with the Decision Matrix** — this is the "what we built vs. what we deliberately avoided" slide.
 
