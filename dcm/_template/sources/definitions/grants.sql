@@ -14,7 +14,7 @@ GRANT ROLE {{ persona_name(domain, p.name) }} TO ROLE SYSADMIN;
 -- oidc_service_user.tf, Repo 1) — demonstrates the tiered RBAC model end-to-end for real
 -- downstream workloads. Only personas with an `oidc_user` configured get this grant.
 {% for p in personas %}
-{% if p.oidc_user %}
+{% if p.oidc_user | default(false) %}
 GRANT ROLE {{ persona_name(domain, p.name) }} TO USER {{ p.oidc_user }};
 {% endif %}
 {% endfor %}
@@ -26,7 +26,7 @@ GRANT CREATE MASKING POLICY, CREATE ROW ACCESS POLICY ON SCHEMA {{ db }}.{{ poli
 -- Tier 3: database role hierarchy (write includes read) + privilege grants, per schema
 {% for schema in schemas %}
 {{ grant_schema_read_privileges(db, schema) }}
-{% if not schema.read_only %}
+{% if not (schema.read_only | default(false)) %}
 {{ grant_schema_write_privileges(db, schema) }}
 {% endif %}
 {% endfor %}
@@ -34,12 +34,12 @@ GRANT CREATE MASKING POLICY, CREATE ROW ACCESS POLICY ON SCHEMA {{ db }}.{{ poli
 -- Tier 2: functional roles composed from Tier 3 (database) + Tier 4 (warehouse) roles
 {% for f in functional_roles %}
 {{ grant_functional_role_composition(domain, db, f) }}
-{% if f.needs_create_integration %}
+{% if f.needs_create_integration | default(false) %}
 -- STORAGE INTEGRATION is an account-level object (bridges to an external cloud account) —
 -- CREATE INTEGRATION is only grantable at the account level, not per-schema/database.
 GRANT CREATE INTEGRATION ON ACCOUNT TO ROLE {{ functional_name(domain, f.name) }};
 {% endif %}
-{% if f.needs_create_schema %}
+{% if f.needs_create_schema | default(false) %}
 -- Transformation tools (e.g. dbt) run a CREATE SCHEMA IF NOT EXISTS check against their
 -- target schema at the start of every invocation, even when the schema already exists.
 -- CREATE SCHEMA is only grantable at the database level in Snowflake, so this lives here

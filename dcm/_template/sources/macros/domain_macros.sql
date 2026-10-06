@@ -51,7 +51,7 @@ DEFINE ROLE {{ functional_name(domain, f.name) }}
 {% macro define_schema_roles(db, schema) %}
 DEFINE DATABASE ROLE {{ db }}.{{ schema.name }}_SCRL_R
   COMMENT = 'Tier 3 database role: read-only on {{ domain }}.{{ schema.name }}{{ schema.r_comment_suffix | default("") }}';
-{% if not schema.read_only %}
+{% if not (schema.read_only | default(false)) %}
 DEFINE DATABASE ROLE {{ db }}.{{ schema.name }}_SCRL_W
   COMMENT = 'Tier 3 database role: read-write on {{ domain }}.{{ schema.name }} (includes read){{ schema.w_comment_suffix | default("") }}';
 {% endif %}
@@ -68,7 +68,7 @@ GRANT SELECT ON FUTURE TABLES IN SCHEMA {{ db }}.{{ schema.name }} TO DATABASE R
 GRANT DATABASE ROLE {{ db }}.{{ schema.name }}_SCRL_R TO DATABASE ROLE {{ db }}.{{ schema.name }}_SCRL_W;
 GRANT INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA {{ db }}.{{ schema.name }} TO DATABASE ROLE {{ db }}.{{ schema.name }}_SCRL_W;
 GRANT INSERT, UPDATE, DELETE, TRUNCATE ON FUTURE TABLES IN SCHEMA {{ db }}.{{ schema.name }} TO DATABASE ROLE {{ db }}.{{ schema.name }}_SCRL_W;
-{% if schema.write_create_privileges %}
+{% if schema.write_create_privileges | default(false) %}
 -- Extra CREATE privilege(s) this schema's write role needs, e.g. CREATE VIEW for a schema
 -- that hosts view-materialized models, CREATE STAGE/FILE FORMAT/PIPE for an ingestion
 -- landing zone. Declared per-schema in manifest.yml, not hardcoded here.
