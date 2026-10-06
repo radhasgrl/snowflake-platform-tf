@@ -3,14 +3,14 @@ variable "domains" {
   type = map(object({
     dbt_service_user          = string
     dbt_repo                  = string
-    dbt_repo_label             = string
-    dbt_repo_id                = string
-    dbt_github_environment     = string
-    ingest_service_user        = string
-    ingest_repo                = string
-    ingest_repo_label          = string
-    ingest_repo_id             = string
-    ingest_github_environment  = string
+    dbt_repo_label            = string
+    dbt_repo_id               = string
+    dbt_github_environment    = string
+    ingest_service_user       = string
+    ingest_repo               = string
+    ingest_repo_label         = string
+    ingest_repo_id            = string
+    ingest_github_environment = string
   }))
 }
 
