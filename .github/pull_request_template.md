@@ -16,7 +16,7 @@
 - [ ] `terraform plan` output reviewed (posted as a PR comment by the `plan` job)
 - [ ] `snow dcm plan` output reviewed (posted as a PR comment by the `dcm-plan` job)
 - [ ] No secrets or credentials included in this change
-- [ ] Environment-specific values are scoped to the correct `terraform/env/<env>/` (Terraform) or target in `dcm/manifest.yml` (DCM)
+- [ ] Environment-specific values are scoped to the correct `terraform/env/<env>/` (Terraform) or target in `dcm/domains/<domain>/manifest.yml` (DCM)
 
 ## Environment Impact
 

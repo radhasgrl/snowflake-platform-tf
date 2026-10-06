@@ -105,11 +105,17 @@ jobs:
             --default \
             --no-interactive
 
+      # Synthesizes dcm/domains/customer/sources/ from dcm/_template/ + dcm/account/ (see
+      # dcm/sync-domain.sh) — this is what keeps domain onboarding at zero duplicated SQL.
+      # Never committed; regenerated fresh on every run.
+      - name: Synthesize Customer domain sources
+        run: bash sync-domain.sh customer
+
       # `snow dcm deploy`/`plan` require the DCM Project object itself to already exist —
       # unlike `CREATE USER IF NOT EXISTS`-style idempotency elsewhere, DCM has a separate
       # create step. --if-not-exists makes this safe to run on every deploy.
       - name: Create DCM project (idempotent)
-        run: snow dcm create --target DEV --if-not-exists
+        run: snow dcm create --target CUSTOMER --from domains/customer --if-not-exists
 
       - name: DCM Deploy
-        run: snow dcm deploy --target DEV
+        run: snow dcm deploy --target CUSTOMER --from domains/customer

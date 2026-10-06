@@ -3,7 +3,7 @@
 # client in MDP_Platform_Engineering_CICD_IaC_Repo_Architecture_v0.1.md §2.2.
 #
 # `removed` blocks (Terraform >= 1.7) forget these resources without destroying the live
-# Snowflake objects — `../dcm/sources/definitions/*.sql` now declares the exact same
+# Snowflake objects — `../dcm/_template/sources/definitions/*.sql` now declares the exact same
 # objects, so DCM adopts them on the next `snow dcm deploy` with no disruption. This file is
 # applied once by `terraform apply`; it can be deleted in a follow-up change once the
 # cutover is confirmed (the `removed` directive only matters for the single apply that
