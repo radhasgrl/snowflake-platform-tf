@@ -1,5 +1,5 @@
 # Databases, schemas, warehouses, functional roles, grants and placeholder masking/row-access
-# policies moved to DCM (see ../dcm/sources/definitions/) — their outputs moved with them.
+# policies moved to DCM (see ../dcm/_template/sources/definitions/) — their outputs moved with them.
 # Terraform's remaining scope is the account/platform layer: the GitHub OIDC service
 # identities below. One identity per engine per environment — see oidc_service_user.tf for
 # why the old separate *_PLAN_SVC identities are no longer needed.

@@ -27,3 +27,9 @@ override.tf.json
 *.pptx
 MDP_Platform_Engineering_CICD_IaC_Repo_Architecture_v0.1.md
 MDP_Platform_Solution_Architecture_v0.3.md
+
+# DCM per-domain `sources/` is synthesized at build time from dcm/_template/ + dcm/account/
+# (see dcm/sync-domain.sh) — never committed, always regenerated fresh before every
+# `snow dcm plan/deploy`. This is the mechanism that keeps domain onboarding at zero
+# duplicated SQL: editing the one shared template updates every domain's next deploy.
+dcm/domains/*/sources/

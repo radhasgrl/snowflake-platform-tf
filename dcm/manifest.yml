@@ -1,9 +1,0 @@
-manifest_version: 2
-type: DCM_PROJECT
-
-default_target: DEV
-
-targets:
-  DEV:
-    project_name: DEV_ADMIN_DB.DCM.PLATFORM_DCM
-    account_identifier: xygpmhm-gq04150
