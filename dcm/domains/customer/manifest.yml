@@ -1,5 +1,7 @@
 manifest_version: 2
 type: DCM_PROJECT
+# (no-op comment — verifying the dynamic matrix triggers a real dcm-plan job for a
+# domain whose folder actually changed; see PR #16)
 
 default_target: CUSTOMER
 
