@@ -114,7 +114,9 @@ Nothing Terraform-related lives outside `terraform/`; nothing DCM-related lives 
 │   │   ├── qa/                       # scaffolded, not yet wired into any pipeline
 │   │   └── prod/                     # scaffolded, not yet wired into any pipeline
 │   │
-│   ├── oidc_service_user.tf          # GitHub OIDC identities (Terraform, DCM, dbt, ingestion engines)
+│   ├── oidc_service_user.tf          # Platform-level OIDC identities (Terraform + DCM engines)
+│   ├── domain_identities.tf          # Per-domain OIDC identities (dbt + ingest), for_each-driven —
+│   │                                 #   onboarding a domain = one new local.domains map entry
 │   ├── dcm_home.tf                   # DEV_ADMIN_DB.DCM, the DCM project's own home
 │   ├── ingestion_aws_infra.tf        # Repo 2's S3 bucket + IAM roles (provisioned here, not in Repo 2)
 │   ├── removed.tf                    # one-time `removed` blocks for the DCM cutover
@@ -125,25 +127,31 @@ Nothing Terraform-related lives outside `terraform/`; nothing DCM-related lives 
 │
 ├── dcm/
 │   ├── _template/                    # THE canonical, domain-agnostic template — never
-│   │   └── sources/                  #   duplicated per domain. Fully Jinja2-templated.
-│   │       ├── definitions/
-│   │       │   ├── databases.sql
-│   │       │   ├── schemas.sql
-│   │       │   ├── warehouses.sql    # per-domain workload warehouses + Tier 4 roles
-│   │       │   ├── roles.sql         # Tier 1 persona, Tier 2 functional
-│   │       │   ├── database_roles.sql # Tier 3 database roles (schema-scoped read/write)
-│   │       │   ├── grants.sql        # wires Tier 3/4 -> Tier 2 -> Tier 1
-│   │       │   ├── masking.sql
-│   │       │   ├── row_access.sql
-│   │       │   └── tables.sql        # RAW.CUSTOMERS — loaded by Repo 2, read by Repo 3
-│   │       └── macros/
-│   │           └── domain_macros.sql # reusable naming/role/grant macros, shared by every domain
+│   │   ├── sources/                  #   duplicated per domain. Fully Jinja2-templated.
+│   │   │   ├── definitions/
+│   │   │   │   ├── databases.sql
+│   │   │   │   ├── schemas.sql
+│   │   │   │   ├── warehouses.sql    # per-domain workload warehouses + Tier 4 roles
+│   │   │   │   ├── roles.sql         # Tier 1 persona, Tier 2 functional
+│   │   │   │   ├── database_roles.sql # Tier 3 database roles (schema-scoped read/write)
+│   │   │   │   ├── grants.sql        # wires Tier 3/4 -> Tier 2 -> Tier 1
+│   │   │   │   ├── masking.sql
+│   │   │   │   ├── row_access.sql
+│   │   │   │   └── tables.sql        # RAW.CUSTOMERS — loaded by Repo 2, read by Repo 3
+│   │   │   └── macros/
+│   │   │       └── domain_macros.sql # reusable naming/role/grant macros, shared by every domain
+│   │   └── _validate_render.py       # offline, Snowflake-free check that a domain's
+│   │                                 #   manifest.yml renders cleanly against this template
 │   ├── domains/
-│   │   └── customer/
-│   │       ├── manifest.yml          # Customer's own config — schemas, personas, functional
-│   │       │                         #   roles, warehouses, tables. Zero SQL.
-│   │       └── sources/              # SYNTHESIZED by sync-domain.sh from _template/ —
-│   │                                 #   gitignored, never committed, regenerated every run
+│   │   ├── customer/
+│   │   │   ├── manifest.yml          # Customer's own config — schemas, personas, functional
+│   │   │   │                         #   roles, warehouses, tables. Zero SQL. LIVE/deployed.
+│   │   │   └── sources/              # SYNTHESIZED by sync-domain.sh from _template/ —
+│   │   │                             #   gitignored, never committed, regenerated every run
+│   │   └── procurement/
+│   │       └── manifest.yml          # Domain #2 TEMPLATE — proves the pattern generalizes
+│   │                                 #   beyond Customer. NOT wired into any workflow, NOT
+│   │                                 #   deployed — see "Onboarding a New Domain" below.
 │   └── sync-domain.sh                # copies _template/ into dcm/domains/<domain>/sources/
 │                                     #   immediately before every snow dcm plan/deploy
 │
@@ -253,9 +261,9 @@ terraform init -backend-config="env/dev/backend.hcl"
 ```
 
 Its first successful `terraform apply` creates the GitHub OIDC service users
-(`GITHUB_DEV_TERRAFORM_SVC`, `GITHUB_DEV_DCM_SVC`, `GITHUB_DEV_DBT_SVC`,
-`GITHUB_DEV_INGEST_SVC` — see `terraform/oidc_service_user.tf`) that every subsequent CI
-run, and Repos 2/3's pipelines, authenticate as.
+(`GITHUB_DEV_TERRAFORM_SVC`, `GITHUB_DEV_DCM_SVC` in `terraform/oidc_service_user.tf`;
+`GITHUB_DEV_DBT_SVC`, `GITHUB_DEV_INGEST_SVC` in `terraform/domain_identities.tf`) that every
+subsequent CI run, and Repos 2/3's pipelines, authenticate as.
 
 ### Mandatory notes
 - Both bootstrap stacks' local state files (`terraform/bootstrap/*/terraform.tfstate`) are
@@ -332,6 +340,56 @@ platform doesn't currently have any). The current, live definitions for all of t
 `roles.sql`, `database_roles.sql`, and `grants.sql`, with the actual per-domain values in
 `dcm/domains/customer/manifest.yml` — treat those files, not this table, as the source of
 truth going forward.
+
+---
+
+## Onboarding a New Domain
+
+This is the actual, repeatable procedure for adding domain #2 (and #3...#200) — not a
+hypothetical. `dcm/domains/procurement/manifest.yml` exists in this repo right now as a
+**worked example**, built and validated exactly this way, but deliberately **not deployed**
+(see "Known Limitations" below for why).
+
+1. **Write `dcm/domains/<domain>/manifest.yml`.** Copy an existing domain's manifest, change
+   `domain`, `domain_comment`, and the `schemas`/`warehouses`/`personas`/`functional_roles`/
+   `tables` values to match the new domain. Give it its **own new `project_name`**
+   (e.g. `DEV_ADMIN_DB.DCM.PROCUREMENT_DCM`) — brand-new domains always get a fresh DCM
+   project; only Customer stayed on the pre-templating project for migration-safety
+   reasons (see History above). No SQL is written by hand anywhere in this step.
+
+2. **Validate it renders cleanly, offline, before touching Snowflake.**
+   ```powershell
+   cd dcm/_template
+   python _validate_render.py ../domains/<domain>/manifest.yml <CONFIG_NAME>
+   ```
+   This runs the same Jinja2 macros DCM itself uses, in `StrictUndefined` mode, against
+   every file in `sources/definitions/` — it catches the exact class of bug this project
+   hit once for real (an optional manifest key missing a `| default(...)` guard) without
+   ever creating or touching a live Snowflake object.
+
+3. **Add one new entry to `local.domains` in `terraform/domain_identities.tf`** —
+   `GITHUB_DEV_<DOMAIN>_DBT_SVC` (scoped to that domain's own dbt repo) and
+   `GITHUB_DEV_<DOMAIN>_INGEST_SVC` (scoped to a new GitHub Environment in the shared
+   ingestion repo, e.g. `DEV-Ingest-<Domain>`) — referenced by the manifest's
+   `DBT_SERVICE`/`INGEST_SERVICE` persona `oidc_user` fields from step 1.
+
+4. **Add one new named job** to `terraform-plan.yml`/`terraform-apply.yml` —
+   `dcm-plan-<domain>`/`dcm-deploy-<domain>`, copied from the existing Customer job with
+   `CUSTOMER` → `<DOMAIN>` swapped. This repo follows the same reference architecture's
+   convention of one explicit job per domain (not a dynamic matrix) — simple, visible per
+   domain in the Actions UI, and exactly how the client's own reference pipeline does it.
+
+5. **Merge.** CI creates the new DCM project (`snow dcm create --if-not-exists`) and
+   deploys it — same mechanism already verified live for Customer and for the Option B
+   warehouse rename.
+
+### Known Limitations (this section specifically)
+
+`dcm/domains/procurement/manifest.yml` is intentionally a **template only** — steps 3 and 4
+above have *not* been done for it, so it creates nothing in Snowflake. This is a deliberate
+demo choice: proving the pattern generalizes (step 1-2, done and verified) without carrying
+a second set of live identities/objects/repos that would need ongoing upkeep before this is
+actually needed for a real client domain.
 
 ---
 
@@ -458,5 +516,6 @@ build covers:
 | Masking / row-access policies | PII/RLS enforcement | 🟡 Scaffolded as placeholders; real rules pending client input |
 | dbt integration | Repo 3 (`customer-domain-dbt`) — staging → marts | ✅ Implemented and verified end-to-end |
 | Ingestion | Repo 2 (`data-ingestion-raw`) — Snowpipe S3 → RAW | ✅ Implemented and verified end-to-end |
+| Domain #2+ onboarding pattern | `dcm/domains/procurement/manifest.yml` + `_validate_render.py` | 🟡 Template written and render-validated; deliberately not deployed (see "Onboarding a New Domain") |
 | QA / PROD environments | Second+ environment tier, promotion flow | ⬜ Not started — pattern documented, not built |
 | Schema migrations tooling (schemachange/Flyway) | Versioned migration history beyond DCM's own diffing | ⬜ Not started |
