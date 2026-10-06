@@ -115,46 +115,7 @@ resource "snowflake_grant_account_role" "github_dev_dcm_securityadmin" {
   depends_on = [snowflake_execute.github_dev_dcm_service_user]
 }
 
-# dbt identity — deliberately least-privilege, unlike the two identities above. This user
-# gets no admin role grants from Terraform at all; DCM grants it only the
-# DEV_CUSTOMER_DBT_SERVICE_PRSN persona role it actually needs (see
-# ../dcm/_template/sources/definitions/grants.sql), demonstrating the tiered RBAC model in practice
-# for a real downstream workload (Repo 3, customer-domain-dbt).
-resource "snowflake_execute" "github_dev_dbt_service_user" {
-  provider = snowflake.useradmin
-
-  execute = <<-SQL
-    CREATE USER IF NOT EXISTS GITHUB_DEV_DBT_SVC
-      TYPE = SERVICE
-      COMMENT = 'GitHub Actions OIDC identity for customer-domain-dbt (Repo 3) — least-privilege, scoped to DEV_CUSTOMER_DBT_SERVICE_PRSN only'
-      WORKLOAD_IDENTITY = (
-        TYPE = OIDC
-        ISSUER = 'https://token.actions.githubusercontent.com'
-        SUBJECT = 'repo:radhasgrl@43290275/customer-domain-dbt@1405522917:environment:DEV-dbt'
-      )
-  SQL
-
-  revert = "DROP USER IF EXISTS GITHUB_DEV_DBT_SVC"
-}
-
-# Ingestion identity (Repo 2, data-ingestion-raw) — same least-privilege pattern as the dbt
-# identity above. DCM grants it DEV_CUSTOMER_INGEST_SERVICE_PRSN only (see
-# ../dcm/_template/sources/definitions/grants.sql), which in turn only carries
-# DEV_CUSTOMER_INGEST_FNCRL — enough to create/manage the storage integration, stage, file
-# format and pipe, and load into RAW, nothing more.
-resource "snowflake_execute" "github_dev_ingest_service_user" {
-  provider = snowflake.useradmin
-
-  execute = <<-SQL
-    CREATE USER IF NOT EXISTS GITHUB_DEV_INGEST_SVC
-      TYPE = SERVICE
-      COMMENT = 'GitHub Actions OIDC identity for data-ingestion-raw (Repo 2) — least-privilege, scoped to DEV_CUSTOMER_INGEST_SERVICE_PRSN only'
-      WORKLOAD_IDENTITY = (
-        TYPE = OIDC
-        ISSUER = 'https://token.actions.githubusercontent.com'
-        SUBJECT = 'repo:radhasgrl@43290275/data-ingestion-raw@1405785591:environment:DEV-Ingest'
-      )
-  SQL
-
-  revert = "DROP USER IF EXISTS GITHUB_DEV_INGEST_SVC"
-}
+# Per-domain dbt/ingestion identities (Repo 3's and Repo 2's OIDC users) have moved to
+# domain_identities.tf — a for_each-driven pattern so onboarding domain #2+ is one new map
+# entry, not a hand-written copy of these two resources. See that file and README.md's
+# "Onboarding a New Domain" section.
