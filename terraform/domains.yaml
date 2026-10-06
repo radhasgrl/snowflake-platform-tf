@@ -1,0 +1,36 @@
+# Single source of truth for per-domain OIDC identity config — the actual list
+# terraform/modules/domain_onboarding is instantiated with. Onboarding domain #2+ is: add
+# one more top-level entry here, plus the matching persona `oidc_user` values in that
+# domain's dcm/domains/<domain>/manifest.yml. See README.md's "Onboarding a New Domain"
+# section for the full procedure.
+customer:
+  # Kept as the original hand-written name (predates this domain-prefixed convention)
+  # rather than renamed, to avoid a disruptive live identity rename for zero benefit.
+  dbt_service_user: "GITHUB_DEV_DBT_SVC"
+  dbt_repo: "customer-domain-dbt"
+  dbt_repo_label: "customer-domain-dbt (Repo 3)"
+  dbt_repo_id: "1405522917"
+  dbt_github_environment: "DEV-dbt"
+
+  ingest_service_user: "GITHUB_DEV_INGEST_SVC"
+  ingest_repo: "data-ingestion-raw"
+  ingest_repo_label: "data-ingestion-raw (Repo 2)"
+  ingest_repo_id: "1405785591"
+  ingest_github_environment: "DEV-Ingest"
+
+# Domain #2 (Procurement) — template only, not yet onboarded. Uncomment once
+# procurement-domain-dbt exists for real and its numeric GitHub repo ID is known
+# (`gh api repos/radhasgrl/procurement-domain-dbt --jq .id`), and once a
+# DEV-Ingest-Procurement GitHub Environment has been created in data-ingestion-raw.
+# procurement:
+#   dbt_service_user: "GITHUB_DEV_PROCUREMENT_DBT_SVC"
+#   dbt_repo: "procurement-domain-dbt"
+#   dbt_repo_label: "procurement-domain-dbt (Repo 3b)"
+#   dbt_repo_id: "<fill in once that repo exists>"
+#   dbt_github_environment: "DEV-dbt"
+#
+#   ingest_service_user: "GITHUB_DEV_PROCUREMENT_INGEST_SVC"
+#   ingest_repo: "data-ingestion-raw"
+#   ingest_repo_label: "data-ingestion-raw (Repo 2)"
+#   ingest_repo_id: "1405785591"
+#   ingest_github_environment: "DEV-Ingest-Procurement"

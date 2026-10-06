@@ -115,8 +115,14 @@ Nothing Terraform-related lives outside `terraform/`; nothing DCM-related lives 
 │   │   └── prod/                     # scaffolded, not yet wired into any pipeline
 │   │
 │   ├── oidc_service_user.tf          # Platform-level OIDC identities (Terraform + DCM engines)
-│   ├── domain_identities.tf          # Per-domain OIDC identities (dbt + ingest), for_each-driven —
-│   │                                 #   onboarding a domain = one new local.domains map entry
+│   ├── domain_identities.tf          # Instantiates modules/domain_onboarding/ for every
+│   │                                 #   domain in domains.yaml
+│   ├── domains.yaml                  # Single source of truth — onboarding a domain = one
+│   │                                 #   new top-level entry here, nothing else
+│   ├── modules/
+│   │   └── domain_onboarding/        # Reusable module: per-domain dbt + ingest OIDC
+│   │       ├── main.tf               #   identity resources, for_each-driven over
+│   │       └── variables.tf          #   var.domains (populated from domains.yaml)
 │   ├── dcm_home.tf                   # DEV_ADMIN_DB.DCM, the DCM project's own home
 │   ├── ingestion_aws_infra.tf        # Repo 2's S3 bucket + IAM roles (provisioned here, not in Repo 2)
 │   ├── removed.tf                    # one-time `removed` blocks for the DCM cutover
@@ -275,8 +281,9 @@ terraform init -backend-config="env/dev/backend.hcl"
 
 Its first successful `terraform apply` creates the GitHub OIDC service users
 (`GITHUB_DEV_TERRAFORM_SVC`, `GITHUB_DEV_DCM_SVC` in `terraform/oidc_service_user.tf`;
-`GITHUB_DEV_DBT_SVC`, `GITHUB_DEV_INGEST_SVC` in `terraform/domain_identities.tf`) that every
-subsequent CI run, and Repos 2/3's pipelines, authenticate as.
+`GITHUB_DEV_DBT_SVC`, `GITHUB_DEV_INGEST_SVC` via `modules/domain_onboarding/`, configured
+in `terraform/domains.yaml`) that every subsequent CI run, and Repos 2/3's pipelines,
+authenticate as.
 
 ### Mandatory notes
 - Both bootstrap stacks' local state files (`terraform/bootstrap/*/terraform.tfstate`) are
@@ -393,11 +400,13 @@ hypothetical. `dcm/domains/procurement/manifest.yml` exists in this repo right n
    hit once for real (an optional manifest key missing a `| default(...)` guard) without
    ever creating or touching a live Snowflake object.
 
-3. **Add one new entry to `local.domains` in `terraform/domain_identities.tf`** —
+3. **Add one new top-level entry to `terraform/domains.yaml`** —
    `GITHUB_DEV_<DOMAIN>_DBT_SVC` (scoped to that domain's own dbt repo) and
    `GITHUB_DEV_<DOMAIN>_INGEST_SVC` (scoped to a new GitHub Environment in the shared
    ingestion repo, e.g. `DEV-Ingest-<Domain>`) — referenced by the manifest's
-   `DBT_SERVICE`/`INGEST_SERVICE` persona `oidc_user` fields from step 1.
+   `DBT_SERVICE`/`INGEST_SERVICE` persona `oidc_user` fields from step 1. Nothing in
+   `terraform/modules/domain_onboarding/` ever needs to change — it's driven entirely by
+   this file.
 
 4. **Add one new entry to `dcm/active_domains.json`** — `{"name": "<domain>", "target":
    "<DOMAIN>"}`. This is the single switch that turns the domain "on" for CI: the
