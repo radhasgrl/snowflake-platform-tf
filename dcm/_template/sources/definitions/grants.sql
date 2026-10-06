@@ -1,5 +1,5 @@
 -- Grants. Tiered RBAC composition for this domain: Tier 3 (database roles) + Tier 4
--- (warehouse roles, account-level/shared) -> Tier 2 (functional roles) -> Tier 1 (persona
+-- (warehouse roles, domain-owned) -> Tier 2 (functional roles) -> Tier 1 (persona
 -- roles). See roles.sql / database_roles.sql for the role definitions this file wires
 -- together. Fully generic — every name is derived via macros from manifest.yml config,
 -- nothing domain-specific is hardcoded in this file.
@@ -22,6 +22,12 @@ GRANT ROLE {{ persona_name(domain, p.name) }} TO USER {{ p.oidc_user }};
 -- Lets SECURITYADMIN create masking/row-access policies in this domain's policy schema
 -- (conventionally SHARED).
 GRANT CREATE MASKING POLICY, CREATE ROW ACCESS POLICY ON SCHEMA {{ db }}.{{ policy_schema }} TO ROLE SECURITYADMIN;
+
+-- Tier 4: this domain's own warehouse role hierarchy (USAGE -> MONITOR -> OPERATE) +
+-- privilege grants. Per-domain, not shared — see warehouses.sql.
+{% for wh in warehouses %}
+{{ grant_warehouse_privileges(domain, wh) }}
+{% endfor %}
 
 -- Tier 3: database role hierarchy (write includes read) + privilege grants, per schema
 {% for schema in schemas %}

@@ -105,7 +105,7 @@ jobs:
             --default \
             --no-interactive
 
-      # Synthesizes dcm/domains/customer/sources/ from dcm/_template/ + dcm/account/ (see
+      # Synthesizes dcm/domains/customer/sources/ from dcm/_template/ (see
       # dcm/sync-domain.sh) — this is what keeps domain onboarding at zero duplicated SQL.
       # Never committed; regenerated fresh on every run.
       - name: Synthesize Customer domain sources
