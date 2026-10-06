@@ -66,6 +66,54 @@ jobs:
   # must exist before DCM can authenticate and deploy the object layer. Kept as a second
   # job in the same workflow rather than a separate pipeline, per the single-pipeline
   # design rule in MDP_Platform_Engineering_CICD_IaC_Repo_Architecture_v0.1.md §2.6.
+  account-deploy:
+    name: DCM Deploy (account)
+    runs-on: ubuntu-latest
+    needs: apply
+    environment:
+      name: DEV-DCM
+
+    env:
+      SNOWFLAKE_ACCOUNT: xygpmhm-gq04150
+      SNOWFLAKE_USER: GITHUB_DEV_DCM_SVC
+      SNOWFLAKE_WORKLOAD_IDENTITY_PROVIDER: OIDC
+
+    defaults:
+      run:
+        working-directory: dcm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Snowflake CLI (OIDC)
+        uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
+
+      - name: Create default Snowflake CLI connection (OIDC)
+        run: |
+          snow connection add \
+            --connection-name github \
+            --account "$SNOWFLAKE_ACCOUNT" \
+            --user "$SNOWFLAKE_USER" \
+            --role SYSADMIN \
+            --authenticator WORKLOAD_IDENTITY \
+            --workload-identity-provider OIDC \
+            --default \
+            --no-interactive
+
+      # `snow dcm deploy`/`plan` require the DCM Project object itself to already exist —
+      # unlike `CREATE USER IF NOT EXISTS`-style idempotency elsewhere, DCM has a separate
+      # create step. --if-not-exists makes this safe to run on every deploy.
+      - name: Create DCM project (idempotent)
+        run: snow dcm create --target ACCOUNT --from account --if-not-exists
+
+      - name: DCM Deploy
+        run: snow dcm deploy --target ACCOUNT --from account
+
   detect-domains:
     name: Detect Changed Domains
     runs-on: ubuntu-latest

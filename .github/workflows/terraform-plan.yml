@@ -98,6 +98,76 @@ jobs:
         if: steps.plan.outcome == 'failure'
         run: exit 1
 
+  # Account-level DCM project — genuinely platform-wide (one warehouse for CI/platform
+  # tooling), never repeated per domain. Always runs on every plan, unlike the per-domain
+  # matrix below, since there's exactly one of this project and it rarely changes.
+  account-plan:
+    name: DCM Plan (account)
+    runs-on: ubuntu-latest
+    environment:
+      name: DEV-DCM
+
+    env:
+      SNOWFLAKE_ACCOUNT: xygpmhm-gq04150
+      SNOWFLAKE_USER: GITHUB_DEV_DCM_SVC
+      SNOWFLAKE_WORKLOAD_IDENTITY_PROVIDER: OIDC
+
+    defaults:
+      run:
+        working-directory: dcm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Snowflake CLI (OIDC)
+        uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
+
+      - name: Create default Snowflake CLI connection (OIDC)
+        run: |
+          snow connection add \
+            --connection-name github \
+            --account "$SNOWFLAKE_ACCOUNT" \
+            --user "$SNOWFLAKE_USER" \
+            --role SYSADMIN \
+            --authenticator WORKLOAD_IDENTITY \
+            --workload-identity-provider OIDC \
+            --default \
+            --no-interactive
+
+      # `snow dcm plan`/`deploy` require the DCM Project object itself to already exist —
+      # --if-not-exists makes this safe to run on every plan, including the very first one.
+      - name: Create DCM project (idempotent)
+        run: snow dcm create --target ACCOUNT --from account --if-not-exists
+
+      - name: DCM Plan
+        id: dcm_plan
+        run: snow dcm plan --target ACCOUNT --from account 2>&1 | tee dcm_plan_account_output.txt
+        continue-on-error: true
+
+      - name: Post DCM plan as PR comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('dcm/dcm_plan_account_output.txt', 'utf8');
+            const truncated = plan.length > 60000 ? plan.slice(0, 60000) + '\n\n...output truncated' : plan;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## DCM Plan (DEV, account)\n\`\`\`\n${truncated}\n\`\`\``
+            });
+
+      - name: Fail if DCM plan failed
+        if: steps.dcm_plan.outcome == 'failure'
+        run: exit 1
+
   # Runs in parallel with the Terraform plan job (no `needs:`) — plan is always read-only
   # in both engines, so DCM's plan preview doesn't depend on Terraform's plan finishing
   # first. Only *apply/deploy* is sequential (see dcm-deploy's `needs: apply` in

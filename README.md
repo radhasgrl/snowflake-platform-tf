@@ -126,6 +126,11 @@ Nothing Terraform-related lives outside `terraform/`; nothing DCM-related lives 
 │   └── .terraform-version            # Pins Terraform to 1.16.0
 │
 ├── dcm/
+│   ├── account/                       # Account-level DCM project — genuinely
+│   │   ├── manifest.yml               #   platform-wide (one CI/tooling warehouse),
+│   │   └── sources/definitions/       #   hand-written (never repeated per domain, so no
+│   │       └── warehouses.sql         #   templating needed) — matches the infra-platform
+│   │                                 #   reference's own account-level dcm/manifest.yml.
 │   ├── _template/                    # THE canonical, domain-agnostic template — never
 │   │   ├── sources/                  #   duplicated per domain. Fully Jinja2-templated.
 │   │   │   ├── definitions/
@@ -299,14 +304,17 @@ service user's `WORKLOAD_IDENTITY` auth, with the OIDC token fetched fresh insid
 Pull Request opened
   └─► terraform-plan.yml
         ├── plan job:             fetches Snowflake OIDC token → terraform plan → posts PR comment
+        ├── account-plan job:     snow dcm plan --target ACCOUNT --from account → posts PR comment
+        │                         (always runs — one account-level project, not domain-gated)
         ├── detect-domains job:   diffs changed files against dcm/active_domains.json
         └── dcm-plan job(s):      one per changed active domain (matrix) → snow dcm plan → posts PR comment
-             (plan/detect-domains run in parallel; dcm-plan needs detect-domains;
+             (plan/account-plan/detect-domains run in parallel; dcm-plan needs detect-domains;
               plan is read-only in both engines)
 
 PR merged to main
   └─► terraform-apply.yml
         ├── apply job:            terraform apply -auto-approve
+        ├── account-deploy job:   needs: apply — snow dcm deploy --target ACCOUNT --from account
         ├── detect-domains job:   needs: apply — same diff logic as above
         └── dcm-deploy job(s):    one per changed active domain (matrix) → snow dcm deploy
 ```
