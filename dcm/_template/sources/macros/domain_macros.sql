@@ -22,9 +22,9 @@
 
 {% macro schema_role_name(db, schema, level) %}{{ db }}.{{ schema }}_SCRL_{{ level }}{% endmacro %}
 
-{% macro warehouse_role_name(purpose, level) %}{{ env }}_{{ purpose }}_WH_WHRL_{{ level }}{% endmacro %}
+{% macro warehouse_role_name(domain, purpose, level) %}{{ env }}_{{ domain }}_{{ purpose }}_WH_WHRL_{{ level }}{% endmacro %}
 
-{% macro warehouse_name(purpose) %}{{ env }}_{{ purpose }}_WH{% endmacro %}
+{% macro warehouse_name(domain, purpose) %}{{ env }}_{{ domain }}_{{ purpose }}_WH{% endmacro %}
 
 {# ============================================================
    Tier 1 / Tier 2 role definitions (persona / functional)
@@ -85,7 +85,7 @@ GRANT {{ schema.write_create_privileges }} ON SCHEMA {{ db }}.{{ schema.name }} 
 GRANT DATABASE ROLE {{ schema_role_name(db, dbg.schema, dbg.level) }} TO ROLE {{ functional_name(domain, func.name) }};
 {% endfor %}
 {% for whg in func.warehouse_grants | default([]) %}
-GRANT ROLE {{ warehouse_role_name(whg.purpose, whg.level) }} TO ROLE {{ functional_name(domain, func.name) }};
+GRANT ROLE {{ warehouse_role_name(domain, whg.purpose, whg.level) }} TO ROLE {{ functional_name(domain, func.name) }};
 {% endfor %}
 {% endmacro %}
 
@@ -98,6 +98,43 @@ GRANT ROLE {{ warehouse_role_name(whg.purpose, whg.level) }} TO ROLE {{ function
 GRANT ROLE {{ functional_name(domain, func_name) }} TO ROLE {{ persona_name(domain, persona.name) }};
 {% endfor %}
 {% for whg in persona.extra_warehouse_grants | default([]) %}
-GRANT ROLE {{ warehouse_role_name(whg.purpose, whg.level) }} TO ROLE {{ persona_name(domain, persona.name) }};
+GRANT ROLE {{ warehouse_role_name(domain, whg.purpose, whg.level) }} TO ROLE {{ persona_name(domain, persona.name) }};
 {% endfor %}
+{% endmacro %}
+
+{# ============================================================
+   Tier 4: per-domain workload warehouses + their USAGE -> MONITOR -> OPERATE roles.
+   Domain-scoped, not shared — each domain gets its own dedicated compute, matching the
+   reference architecture's convention (account-level warehouses, if any exist, are
+   reserved for genuine platform/CI tooling, never for domain workloads).
+============================================================ #}
+
+{% macro define_warehouses(domain, warehouses) %}
+{% for wh in warehouses %}
+DEFINE WAREHOUSE {{ warehouse_name(domain, wh.purpose) }}
+  WAREHOUSE_SIZE = '{{ wh.size }}'
+  WAREHOUSE_TYPE = 'STANDARD'
+  AUTO_SUSPEND = {{ wh.auto_suspend }}
+  AUTO_RESUME = TRUE
+  COMMENT = '{{ wh.comment }}';
+{% endfor %}
+{% endmacro %}
+
+{% macro define_warehouse_roles(domain, warehouses) %}
+{% for wh in warehouses %}
+DEFINE ROLE {{ warehouse_role_name(domain, wh.purpose, 'U') }}
+  COMMENT = 'Tier 4 warehouse: USAGE on {{ warehouse_name(domain, wh.purpose) }}';
+DEFINE ROLE {{ warehouse_role_name(domain, wh.purpose, 'M') }}
+  COMMENT = 'Tier 4 warehouse: MONITOR on {{ warehouse_name(domain, wh.purpose) }} (includes USAGE)';
+DEFINE ROLE {{ warehouse_role_name(domain, wh.purpose, 'O') }}
+  COMMENT = 'Tier 4 warehouse: OPERATE on {{ warehouse_name(domain, wh.purpose) }} (includes MONITOR+USAGE)';
+{% endfor %}
+{% endmacro %}
+
+{% macro grant_warehouse_privileges(domain, wh) %}
+GRANT ROLE {{ warehouse_role_name(domain, wh.purpose, 'U') }} TO ROLE {{ warehouse_role_name(domain, wh.purpose, 'M') }};
+GRANT ROLE {{ warehouse_role_name(domain, wh.purpose, 'M') }} TO ROLE {{ warehouse_role_name(domain, wh.purpose, 'O') }};
+GRANT USAGE ON WAREHOUSE {{ warehouse_name(domain, wh.purpose) }} TO ROLE {{ warehouse_role_name(domain, wh.purpose, 'U') }};
+GRANT MONITOR ON WAREHOUSE {{ warehouse_name(domain, wh.purpose) }} TO ROLE {{ warehouse_role_name(domain, wh.purpose, 'M') }};
+GRANT OPERATE ON WAREHOUSE {{ warehouse_name(domain, wh.purpose) }} TO ROLE {{ warehouse_role_name(domain, wh.purpose, 'O') }};
 {% endmacro %}

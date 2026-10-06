@@ -4,8 +4,8 @@
 --
 -- Database roles (Tier 3) are defined in database_roles.sql since DCM scopes
 -- `DEFINE DATABASE ROLE` per-database. Composition lives in grants.sql.
--- Tier 4 (warehouse) roles are account-level/shared, not domain-specific — see
--- dcm/account/sources/definitions/warehouses.sql.
+-- Tier 4 (warehouse) roles are this domain's own dedicated compute, not shared — see
+-- warehouses.sql in this same folder.
 
 -- Tier 1: persona roles — granted to actual users/service identities
 {{ define_persona_roles(domain, personas) }}

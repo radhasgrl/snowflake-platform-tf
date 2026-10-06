@@ -99,10 +99,10 @@ across environments.
 | Mechanism | Purpose | How it's expressed in this repo |
 |---|---|---|
 | **Provider Role Separation** | The pipeline itself uses 3 different Snowflake roles depending on the operation type | `terraform/providers.tf` — default `SYSADMIN`, alias `useradmin`, alias `securityadmin` |
-| **Tiered Functional/Access Roles** | Business-facing roles reflecting job function, not individual people — not flat account roles, but a 4-tier hierarchy (persona → functional → database/warehouse roles) | `dcm/sources/definitions/roles.sql`, `database_roles.sql` — e.g. `DEV_CUSTOMER_DATA_ENGINEER_PRSN` → `DEV_CUSTOMER_INGEST_FNCRL` → `DEV_CUSTOMER_DB.RAW_SCRL_R/_W` |
-| **Role Hierarchy** | Every tier is granted upward so ownership/visibility is never orphaned | `dcm/sources/definitions/grants.sql` — wires Tier 3/4 → Tier 2 → Tier 1 |
-| **Grants-as-Code** | Every `USAGE`/`SELECT`/`INSERT` privilege is declared in DCM SQL, not issued manually | `dcm/sources/definitions/grants.sql` — warehouse, database, schema, and table-level grants per role |
-| **Column Masking / Row Access Policies** | PII protection and row-level filtering, declared and version-controlled like any other resource | `dcm/sources/definitions/masking.sql`, `row_access.sql` — currently placeholders, pending client-confirmed rules |
+| **Tiered Functional/Access Roles** | Business-facing roles reflecting job function, not individual people — not flat account roles, but a 4-tier hierarchy (persona → functional → database/warehouse roles) | `dcm/_template/sources/definitions/roles.sql`, `database_roles.sql` — e.g. `DEV_CUSTOMER_DATA_ENGINEER_PRSN` → `DEV_CUSTOMER_INGEST_FNCRL` → `DEV_CUSTOMER_DB.RAW_SCRL_R/_W` |
+| **Role Hierarchy** | Every tier is granted upward so ownership/visibility is never orphaned | `dcm/_template/sources/definitions/grants.sql` — wires Tier 3/4 → Tier 2 → Tier 1 |
+| **Grants-as-Code** | Every `USAGE`/`SELECT`/`INSERT` privilege is declared in DCM SQL, not issued manually | `dcm/_template/sources/definitions/grants.sql` — warehouse, database, schema, and table-level grants per role |
+| **Column Masking / Row Access Policies** | PII protection and row-level filtering, declared and version-controlled like any other resource | `dcm/_template/sources/definitions/masking.sql`, `row_access.sql` — currently placeholders, pending client-confirmed rules |
 | **Drift Detection** | Any manual change made outside Terraform/DCM is surfaced on the next `terraform plan`/`snow dcm plan`, not silently accepted | Built into every CI/CD pipeline run automatically |
 
 ---
@@ -232,7 +232,7 @@ live.** The checklist below is kept as reference for extending OIDC to
 
 1. **Show the trust chain diagram** — one pipeline run, two independent authentications (AWS + Snowflake), zero human credentials involved.
 2. **Show GitHub Secrets (names only, values hidden)** — only `AWS_REGION` remains; the old `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`SNOWFLAKE_PRIVATE_KEY`/`SNOWFLAKE_ACCOUNT` "before OIDC" secrets have been deleted — nothing unused left sitting around.
-3. **Show `terraform/providers.tf`** — authentication is hardcoded to `WORKLOAD_IDENTITY`/`OIDC` for all 3 role aliases; the only per-workflow knob is `var.snowflake_oidc_user`, selecting the apply vs plan identity — and `dcm/sources/definitions/roles.sql`, where the pipeline's own Snowflake access is split by operation type across a tiered persona → functional → access role hierarchy, mirroring least-privilege principles a security team will recognize immediately.
+3. **Show `terraform/providers.tf`** — authentication is hardcoded to `WORKLOAD_IDENTITY`/`OIDC` for all 3 role aliases; the only per-workflow knob is `var.snowflake_oidc_user`, selecting the apply vs plan identity — and `dcm/_template/sources/definitions/roles.sql`, where the pipeline's own Snowflake access is split by operation type across a tiered persona → functional → access role hierarchy, mirroring least-privilege principles a security team will recognize immediately.
 4. **Trigger a live pipeline run** — open a PR, show the plan run's "Fetch Snowflake OIDC token" step succeeding (no private key involved), then merge and show the apply run doing the same — zero stored secrets used in either path.
 5. **Close with the Decision Matrix** — this is the "what we built vs. what we deliberately avoided" slide.
 

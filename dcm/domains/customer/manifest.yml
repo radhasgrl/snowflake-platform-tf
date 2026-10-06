@@ -24,6 +24,23 @@ templating:
       domain_comment: "Customer domain — raw, staging, marts and shared objects for this domain"
       policy_schema: SHARED
 
+      # Per-domain workload warehouses (Tier 4) — not shared with any other domain. See
+      # the header comment in domain_macros.sql for why this domain owns its own compute
+      # rather than borrowing account-level/shared warehouses.
+      warehouses:
+        - purpose: INGEST
+          size: XSMALL
+          auto_suspend: 60
+          comment: "Data loading and ingestion workloads"
+        - purpose: TRANSFORM
+          size: XSMALL
+          auto_suspend: 120
+          comment: "dbt transformations and ELT workloads"
+        - purpose: REPORTING
+          size: XSMALL
+          auto_suspend: 60
+          comment: "BI tools and ad-hoc reporting queries"
+
       schemas:
         - name: RAW
           comment: "Landing zone for Snowpipe ingestion (Repo 2, data-ingestion-raw)"
