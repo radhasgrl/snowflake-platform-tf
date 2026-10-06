@@ -152,6 +152,11 @@ Nothing Terraform-related lives outside `terraform/`; nothing DCM-related lives 
 │   │       └── manifest.yml          # Domain #2 TEMPLATE — proves the pattern generalizes
 │   │                                 #   beyond Customer. NOT wired into any workflow, NOT
 │   │                                 #   deployed — see "Onboarding a New Domain" below.
+│   ├── active_domains.json           # The "go live" switch — only domains listed here ever
+│   │                                 #   get a dcm-plan/dcm-deploy CI job (Customer only
+│   │                                 #   today; Procurement is deliberately absent)
+│   ├── detect-changed-domains.sh     # diffs changed files -> which active domains' jobs
+│   │                                 #   should run this CI run (keeps CI load flat at scale)
 │   └── sync-domain.sh                # copies _template/ into dcm/domains/<domain>/sources/
 │                                     #   immediately before every snow dcm plan/deploy
 │
@@ -159,8 +164,11 @@ Nothing Terraform-related lives outside `terraform/`; nothing DCM-related lives 
 │   ├── CODEOWNERS                    # /terraform/ -> platform; /dcm/ -> data engineering
 │   ├── pull_request_template.md      # Layer(s) Affected + validation checklist
 │   └── workflows/
-│       ├── terraform-plan.yml        # plan job (terraform/) + dcm-plan job (dcm/, parallel), on Pull Requests
-│       └── terraform-apply.yml       # apply job (terraform/) + dcm-deploy job (dcm/, needs: apply), on merge to main
+│       ├── terraform-plan.yml        # plan job (terraform/) + detect-domains + dcm-plan
+│       │                             #   matrix job(s) (dcm/, one per changed active
+│       │                             #   domain), on Pull Requests
+│       └── terraform-apply.yml       # apply job (terraform/) + detect-domains + dcm-deploy
+│                                     #   matrix job(s) (dcm/, needs: apply), on merge to main
 │
 ├── .gitignore
 └── README.md
@@ -290,15 +298,25 @@ service user's `WORKLOAD_IDENTITY` auth, with the OIDC token fetched fresh insid
 ```
 Pull Request opened
   └─► terraform-plan.yml
-        ├── plan job:     fetches Snowflake OIDC token → terraform plan → posts PR comment
-        └── dcm-plan job: authenticates as GITHUB_DEV_DCM_SVC via OIDC → snow dcm plan → posts PR comment
-             (both jobs run in parallel — plan is read-only in both engines)
+        ├── plan job:             fetches Snowflake OIDC token → terraform plan → posts PR comment
+        ├── detect-domains job:   diffs changed files against dcm/active_domains.json
+        └── dcm-plan job(s):      one per changed active domain (matrix) → snow dcm plan → posts PR comment
+             (plan/detect-domains run in parallel; dcm-plan needs detect-domains;
+              plan is read-only in both engines)
 
 PR merged to main
   └─► terraform-apply.yml
-        ├── apply job:       terraform apply -auto-approve
-        └── dcm-deploy job:  snow dcm deploy   (needs: apply — runs after, not parallel)
+        ├── apply job:            terraform apply -auto-approve
+        ├── detect-domains job:   needs: apply — same diff logic as above
+        └── dcm-deploy job(s):    one per changed active domain (matrix) → snow dcm deploy
 ```
+
+A domain only ever gets a `dcm-plan`/`dcm-deploy` job if (a) its own `dcm/domains/<domain>/`
+files changed, or (b) the shared `dcm/_template/` changed (which affects every domain), AND
+(c) it's listed in `dcm/active_domains.json`. This is what keeps CI load flat as domains
+scale into the hundreds — a PR touching one domain's manifest never replans/redeploys every
+other domain too. See `dcm/detect-changed-domains.sh` and README's "Onboarding a New Domain"
+section.
 
 Both workflows run under GitHub Environments `DEV-Terraform` and `DEV-DCM` respectively —
 visible under **Settings → Environments** in the GitHub UI, each scoped to its own OIDC
@@ -373,11 +391,13 @@ hypothetical. `dcm/domains/procurement/manifest.yml` exists in this repo right n
    ingestion repo, e.g. `DEV-Ingest-<Domain>`) — referenced by the manifest's
    `DBT_SERVICE`/`INGEST_SERVICE` persona `oidc_user` fields from step 1.
 
-4. **Add one new named job** to `terraform-plan.yml`/`terraform-apply.yml` —
-   `dcm-plan-<domain>`/`dcm-deploy-<domain>`, copied from the existing Customer job with
-   `CUSTOMER` → `<DOMAIN>` swapped. This repo follows the same reference architecture's
-   convention of one explicit job per domain (not a dynamic matrix) — simple, visible per
-   domain in the Actions UI, and exactly how the client's own reference pipeline does it.
+4. **Add one new entry to `dcm/active_domains.json`** — `{"name": "<domain>", "target":
+   "<DOMAIN>"}`. This is the single switch that turns the domain "on" for CI: the
+   `detect-domains` job in both workflows diffs changed files against this list and only
+   creates a `dcm-plan`/`dcm-deploy` job (dynamic matrix, not a hand-copied job block) for
+   domains that are both listed here *and* actually changed. A domain's manifest.yml can
+   exist and be fully valid (like Procurement's) without ever running in CI — adding it to
+   this file is the explicit, auditable "go live" step.
 
 5. **Merge.** CI creates the new DCM project (`snow dcm create --if-not-exists`) and
    deploys it — same mechanism already verified live for Customer and for the Option B
