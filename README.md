@@ -116,7 +116,7 @@ Nothing Terraform-related lives outside `terraform/`; nothing DCM-related lives 
 │   │
 │   ├── env/
 │   │   ├── dev/ (backend.hcl, dev.tfvars)
-│   │   ├── qa/                       # scaffolded, not yet wired into any pipeline
+│   │   ├── test/                     # being wired up now (TEST environment promotion)
 │   │   └── prod/                     # scaffolded, not yet wired into any pipeline
 │   │
 │   ├── oidc_service_user.tf          # Platform-level OIDC identities (Terraform + DCM engines)
@@ -705,7 +705,7 @@ with valid AWS credentials.
 | AWS auth | GitHub OIDC (`AssumeRoleWithWebIdentity`) | Same reasoning — no stored AWS access keys in CI |
 | State storage | AWS S3 + `use_lockfile` | Secure, versioned, native S3 locking (Terraform ≥ 1.10) |
 | State region | `ap-southeast-2` (Sydney) | Aligns with client's AWS region |
-| Environment strategy | Single account, env-prefix naming | `DEV_`, `QA_`, `PROD_` prefixes on all objects — only `DEV_` is wired up today |
+| Environment strategy | Single account, env-prefix naming | `DEV_`, `TEST_`, `PROD_` prefixes on all objects — only `DEV_` is wired up today |
 | Snowflake provider | `snowflakedb/snowflake ~> 2.0` | Resolved to v2.21.0 |
 | CI/CD | GitHub Actions | Already used for source control |
 
@@ -716,10 +716,10 @@ with valid AWS credentials.
 Disclosed deliberately, not hidden — these are the honest boundaries of what this demo
 build covers:
 
-- **DEV-only.** `terraform/env/qa/` and `terraform/env/prod/` tfvars/backend configs are
-  scaffolded but not wired into any pipeline. Extending to QA/PROD is a repeatable pattern
-  (new GitHub Environment pair, new OIDC service-user pair, new DCM manifest target) — not
-  a redesign.
+- **DEV-only (for now — TEST is actively being wired up, see below).** `terraform/env/test/`
+  and `terraform/env/prod/` tfvars/backend configs are scaffolded. Extending to TEST/PROD is
+  a repeatable pattern (new GitHub Environment pair, new OIDC service-user pair, new DCM
+  manifest target) — not a redesign.
 - **Masking/row-access policies are inert placeholders**
   (`dcm/sources/definitions/masking.sql`, `row_access.sql`) — pass-through/allow-all,
   pending client-confirmed PII/RLS rules.
@@ -741,5 +741,5 @@ build covers:
 | dbt integration | Repo 3 (`customer-domain-dbt`) — staging → marts | ✅ Implemented and verified end-to-end |
 | Ingestion | Repo 2 (`data-ingestion-raw`) — Snowpipe S3 → RAW | ✅ Implemented and verified end-to-end |
 | Domain #2+ onboarding pattern | `dcm/domains/procurement/manifest.yml` + `_validate_render.py` | 🟡 Template written and render-validated; deliberately not deployed (see "Onboarding a New Domain") |
-| QA / PROD environments | Second+ environment tier, promotion flow | ⬜ Not started — pattern documented, not built |
+| TEST / PROD environments | Second+ environment tier, promotion flow | 🟡 TEST in progress (this session); PROD not started |
 | Schema migrations tooling (schemachange/Flyway) | Versioned migration history beyond DCM's own diffing | ⬜ Not started |

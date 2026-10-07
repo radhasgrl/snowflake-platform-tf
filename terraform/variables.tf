@@ -11,13 +11,13 @@ variable "snowflake_account_name" {
 }
 
 variable "environment" {
-  description = "Deployment environment (dev, qa, prod)"
+  description = "Deployment environment (dev, test, prod)"
   type        = string
   default     = "dev"
 
   validation {
-    condition     = contains(["dev", "qa", "prod"], var.environment)
-    error_message = "environment must be one of: dev, qa, prod."
+    condition     = contains(["dev", "test", "prod"], var.environment)
+    error_message = "environment must be one of: dev, test, prod."
   }
 }
 
