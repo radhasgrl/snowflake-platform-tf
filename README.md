@@ -19,11 +19,12 @@ creates; see [How Repo 1 Feeds Repos 2 & 3](#how-repo-1-feeds-repos-2--3) below.
 4. [Prerequisites](#prerequisites)
 5. [One-Time Bootstrap (run once, by hand)](#one-time-bootstrap-run-once-by-hand)
 6. [CI/CD Pipeline (ongoing, automated)](#cicd-pipeline-ongoing-automated)
-7. [History — Terraform → DCM Cutover](#history--terraform--dcm-cutover)
-8. [Verification Guide](#verification-guide)
-9. [Key Decisions](#key-decisions)
-10. [Known Limitations (demo scope)](#known-limitations-demo-scope)
-11. [What's Next](#whats-next)
+7. [Destroying / Decommissioning Resources](#destroying--decommissioning-resources)
+8. [History — Terraform → DCM Cutover](#history--terraform--dcm-cutover)
+9. [Verification Guide](#verification-guide)
+10. [Key Decisions](#key-decisions)
+11. [Known Limitations (demo scope)](#known-limitations-demo-scope)
+12. [What's Next](#whats-next)
 
 ---
 
@@ -430,6 +431,40 @@ manifests iterated far more often).
 - `workflow_dispatch:` is enabled on all 4 workflows for manual triggering without needing a
   PR or push.
 - This is deliberately **DEV-only** today — see [Known Limitations](#known-limitations-demo-scope).
+
+---
+
+## Destroying / Decommissioning Resources
+
+There is no automatic destroy trigger — deliberately. `.github/workflows/destroy.yml` is
+**manual-only** (`workflow_dispatch`), and every layer requires typing an exact
+confirmation phrase before anything destructive runs, checked in a separate `guard` job
+first. Nothing downstream executes if the phrase doesn't match exactly.
+
+| Layer | Destroys | Confirmation phrase |
+|---|---|---|
+| `dcm-domain` | One domain's database, schemas, warehouses, roles (not the DCM project container) | the domain name, e.g. `customer` |
+| `dcm-account` | `DEV_DEPLOY_WH` (the account-level project's only managed object) | `ACCOUNT` |
+| `terraform` | The 4 OIDC identities, `DEV_ADMIN_DB`, and Repo 2's S3 bucket + IAM roles | `DESTROY-TERRAFORM-EVERYTHING` |
+
+**Destroy in this order** if tearing down multiple layers: `dcm-domain` first, then
+`dcm-account`, then `terraform` **last** — Terraform owns the identities every other layer
+(and Repos 2/3) authenticate as, so destroying it first strands everything else mid-teardown.
+
+```powershell
+gh workflow run destroy.yml --repo radhasgrl/snowflake-platform-tf \
+  -f layer=dcm-domain -f domain=customer -f confirm=customer
+```
+
+**Known, disclosed risk with the `terraform` layer** — not verified against live
+infrastructure in this session: `terraform destroy` here runs authenticated *as*
+`GITHUB_DEV_TERRAFORM_SVC`, and will drop that very user as part of the destroy. Terraform
+destroys in reverse-dependency order, so the identity is likely dropped near the end of the
+run; the already-established OIDC session for that job will likely keep working for the
+rest of that run (Snowflake doesn't typically force-disconnect an active session just
+because the underlying user row was dropped), but this hasn't been tested end-to-end. For a
+zero-doubt teardown of the Terraform layer, run `terraform destroy` locally instead,
+authenticated as a human admin (e.g. `externalbrowser`/MFA) rather than via this CI identity.
 
 ---
 
