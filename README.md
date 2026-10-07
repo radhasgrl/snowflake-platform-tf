@@ -19,12 +19,13 @@ creates; see [How Repo 1 Feeds Repos 2 & 3](#how-repo-1-feeds-repos-2--3) below.
 4. [Prerequisites](#prerequisites)
 5. [One-Time Bootstrap (run once, by hand)](#one-time-bootstrap-run-once-by-hand)
 6. [CI/CD Pipeline (ongoing, automated)](#cicd-pipeline-ongoing-automated)
-7. [Destroying / Decommissioning Resources](#destroying--decommissioning-resources)
-8. [History — Terraform → DCM Cutover](#history--terraform--dcm-cutover)
-9. [Verification Guide](#verification-guide)
-10. [Key Decisions](#key-decisions)
-11. [Known Limitations (demo scope)](#known-limitations-demo-scope)
-12. [What's Next](#whats-next)
+7. [Environments & Versioning](#environments--versioning)
+8. [Destroying / Decommissioning Resources](#destroying--decommissioning-resources)
+9. [History — Terraform → DCM Cutover](#history--terraform--dcm-cutover)
+10. [Verification Guide](#verification-guide)
+11. [Key Decisions](#key-decisions)
+12. [Known Limitations (demo scope)](#known-limitations-demo-scope)
+13. [What's Next](#whats-next)
 
 ---
 
@@ -338,93 +339,208 @@ service user's `WORKLOAD_IDENTITY` auth, with the OIDC token fetched fresh insid
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `.github/workflows/terraform-plan.yml` | Pull Request touching `terraform/**` | `terraform fmt -check` + `validate` + `plan` (posted as PR comment) |
-| `.github/workflows/terraform-apply.yml` | Push to `main` touching `terraform/**` | `Terraform Apply` |
-| `.github/workflows/dcm-plan.yml` | Pull Request touching `dcm/**` | `DCM Plan (<domain>)` matrix + `DCM Plan (gate)` (posted as PR comments) |
-| `.github/workflows/dcm-deploy.yml` | Push to `main` touching `dcm/**` | `DCM Deploy (<domain>)` matrix |
+| `.github/workflows/terraform-plan.yml` | Pull Request touching `terraform/**` **or** `dcm/**` | `terraform fmt -check` + `validate` + `plan` (posted as PR comment) |
+| `.github/workflows/terraform-apply.yml` | Push to `main` touching `terraform/**` **or** `dcm/**` | `Terraform Apply` |
+| `.github/workflows/dcm-plan.yml` | `workflow_run` — fires once Terraform Plan finishes | `DCM Plan` (one sequential job, all changed domains) |
+| `.github/workflows/dcm-deploy.yml` | `workflow_run` — fires once Terraform Apply finishes | `DCM Deploy` (one sequential job, all changed domains) |
 
-**Terraform and DCM are two fully independent pipelines**, not one combined pipeline —
-deliberately split into separate files (see "Why Terraform and DCM are separate pipelines"
-below). A PR touching only `dcm/` never triggers a Terraform plan, and vice versa; each
-tool's CI load, PR-check naming, and CODEOWNERS routing stay scoped to what actually
-changed.
+**Terraform always runs first, DCM always runs second, one after another — by design,
+per explicit requirement.** The two tools still live in separate files (CI load,
+PR-check naming, and CODEOWNERS routing stay scoped per-tool), but execution is
+sequenced: DCM is triggered by Terraform's own workflow *finishing*, not by the
+PR/push event directly. DCM's identity (`GITHUB_DEV_DCM_SVC`) is created by Terraform,
+so DCM must never run without a guaranteed-successful Terraform run immediately
+before it — this is why both Terraform workflows' path filters include `dcm/**` too: a
+DCM-only change still needs Terraform to run first, so DCM has something to chain from.
 
 ```
-Pull Request touching terraform/**
-  └─► terraform-plan.yml
+Pull Request touching terraform/** or dcm/**
+  └─► terraform-plan.yml  (pull_request)
         └── plan job: fetches Snowflake OIDC token → terraform plan → posts PR comment
+              │
+              ▼  (workflow_run, on completion)
+        dcm-plan.yml
+              ├── if Terraform Plan FAILED: terraform-plan-failed job immediately posts
+              │   "DCM Plan" = failure via the Checks API — no Snowflake contact at all
+              └── if Terraform Plan SUCCEEDED: dcm-plan job —
+                    ├── resolves the PR + exact commit SHA (workflow_run doesn't carry
+                    │   this automatically; looked up via the Commits API)
+                    ├── creates an "in_progress" check run (manual Checks API call —
+                    │   workflow_run-triggered workflows don't auto-attach to a PR's
+                    │   checks, a real GitHub limitation, not a bug — see "Why DCM is
+                    │   sequenced via workflow_run" below)
+                    ├── detects which active domains changed, loops through them
+                    │   sequentially (synthesize → snow dcm create → snow dcm plan)
+                    ├── posts the combined plan output as a PR comment
+                    └── updates the check run to its real pass/fail result
 
-Pull Request touching dcm/**
-  └─► dcm-plan.yml
-        ├── detect-domains job: diffs changed files against dcm/active_domains.json
-        ├── dcm-plan job(s):    one per changed active domain (matrix) → snow dcm plan → posts PR comment
-        └── dcm-plan-gate job:  fan-in job with a fixed name (needs: [detect-domains,
-                                 dcm-plan], if: always()) — the ONE check branch protection
-                                 can require, since matrix job names vary per domain and
-                                 GitHub can't require a dynamically-named check directly
-
-Push to main touching terraform/**
-  └─► terraform-apply.yml
+Push to main touching terraform/** or dcm/**
+  └─► terraform-apply.yml  (push)
         └── apply job: terraform apply -auto-approve
-
-Push to main touching dcm/**
-  └─► dcm-deploy.yml
-        ├── detect-domains job: same diff logic as above
-        └── dcm-deploy job(s):  one per changed active domain (matrix) → snow dcm deploy
+              │
+              ▼  (workflow_run, on completion, gated on success)
+        dcm-deploy.yml
+              └── dcm-deploy job: resolves the commit → detects changed domains →
+                  loops through them sequentially (synthesize → snow dcm create →
+                  snow dcm deploy)
 ```
 
-A domain only ever gets a `dcm-plan`/`dcm-deploy` job if (a) its own `dcm/domains/<domain>/`
-files changed, or (b) the shared `dcm/sources/` changed (which affects every domain), AND
-(c) it's listed in `dcm/active_domains.json`. This is what keeps CI load flat as domains
-scale into the hundreds — a PR touching one domain's manifest never replans/redeploys every
-other domain too. See `dcm/detect-changed-domains.sh` and README's "Onboarding a New Domain"
-section.
+A domain only ever gets planned/deployed if (a) its own `dcm/domains/<domain>/` files
+changed, or (b) the shared `dcm/sources/` changed (which affects every domain), AND
+(c) it's listed in `dcm/active_domains.json`. This keeps CI load flat as domains scale
+into the hundreds — a PR touching one domain's manifest never replans every other
+domain too. Each active domain is still planned/deployed independently inside one
+sequential loop (not a parallel matrix — see below for why), so one domain's failure
+doesn't stop the others from being attempted or reported.
 
 Each workflow runs under its own GitHub Environment (`DEV-Terraform` or `DEV-DCM`) —
 visible under **Settings → Environments** in the GitHub UI, each scoped to its own OIDC
 service-user subject claim.
 
-### Why Terraform and DCM are separate pipelines
+### Why DCM is sequenced via `workflow_run`, and why there's no per-domain matrix anymore
 
-They used to live in two combined files (`terraform-plan.yml`/`terraform-apply.yml` also
-contained the DCM jobs). Split apart because:
+Two real GitHub Actions limitations shaped this design, both confirmed directly against
+GitHub's own documentation rather than assumed:
+
+1. **A `workflow_run`-triggered workflow's results don't automatically attach to the
+   originating PR**, and can't satisfy a required branch-protection status check — only
+   `push`/`pull_request`/`pull_request_review`/`pull_request_target`/`deployment(_status)`
+   -triggered workflows can. Chaining `dcm-plan.yml` off `terraform-plan.yml` finishing
+   (the only way to guarantee real sequencing across two separate files) would otherwise
+   mean `DCM Plan`'s result silently never reaches the PR, leaving the required check
+   stuck as "Expected — Waiting for status to be reported" forever. Fixed by having
+   `dcm-plan.yml` manually create and update its own check run via the Checks API
+   (`github.rest.checks.create`/`update`), tied to the PR's exact commit SHA — the
+   standard, documented pattern for this exact problem, not a workaround invented here.
+2. **A matrix job's dynamically-generated name can never be a required status check** —
+   GitHub can't express "require whichever of `DCM Plan (customer)`, `DCM Plan
+   (procurement)`, ... happened to run this time." The former `DCM Plan (gate)` job
+   existed purely to translate a matrix's dynamic results into one fixed, requireable
+   name. Replacing the per-domain matrix with one sequential job (looping through
+   however many domains need replanning/redeploying) removes the need for that
+   fan-in job entirely — the one job's own fixed name (`DCM Plan`) can be required
+   directly. The trade-off: domains are planned/deployed one after another instead of
+   in parallel, acceptable at this scale and simpler than maintaining both the matrix
+   and a workaround for its naming problem.
+
+### Why Terraform and DCM are still separate files
 
 - **Misleading naming**: a file named `terraform-plan.yml` containing jobs called
   `DCM Plan (customer)` is confusing on its own.
-- **CODEOWNERS can't route by concern while files are shared** — `/terraform/` and `/dcm/`
-  are owned by different teams at the source level; the workflow files now match that.
-- **Wasted CI**: the combined files triggered on `paths: [terraform/**, dcm/**]` (an OR) —
-  a DCM-only PR still ran a real `terraform plan` unconditionally. Each file's own path
-  filter now scopes it to only the tool that actually changed.
-- **Blast radius**: a typo in one tool's job definition can no longer affect the other's
-  file/PR/review.
+- **CODEOWNERS can still route by concern** — `/terraform/` and `/dcm/` are owned by
+  different teams at the source level; the workflow files match that even though
+  execution is now sequenced between them.
+- **Blast radius**: a typo in one tool's job definition can't directly corrupt the
+  other's YAML, even though they now run in a guaranteed order.
 
-**The one real engineering wrinkle**: DCM authenticates as `GITHUB_DEV_DCM_SVC`, an
-identity *Terraform itself creates*. In the combined file, `dcm-deploy` had `needs: apply`
-to guarantee ordering. Splitting into separate files loses that free, same-file ordering
-guarantee — so every DCM job now has its own **"Verify DCM identity is ready"** step that
-authenticates and fails fast with a clear, actionable message
-(`Terraform hasn't created this identity yet — run 'Terraform Apply' first`) instead of a
-cryptic OIDC error, if the identity doesn't exist yet. This isn't a workaround: OIDC
-workload-identity auth against a nonexistent user fails inherently — Snowflake has no way
-to validate a token against a user that was never created — so this check simply converts
-an unavoidable failure into a legible one. The trade-off: onboarding a domain that needs
-*both* a brand-new identity (Terraform) *and* a brand-new manifest (DCM) in the same commit
-means the two pipelines run concurrently rather than strictly sequenced — if DCM's job
-happens to start before Terraform's finishes, it fails fast with the message above, and the
-fix is a one-click workflow re-run. This is deliberately simpler than the alternative
-(chaining `dcm-deploy.yml` off `terraform-apply.yml`'s completion via a `workflow_run`
-trigger), which would restore automatic sequencing but adds real cross-workflow complexity
-(separate trigger semantics, needing to check out `github.event.workflow_run.head_sha`
-explicitly, and a real risk of double-triggering DCM deploy when both tools' paths change
-in the same commit) for a case that's rare in steady-state domain operation (most day-to-day
-changes touch only `dcm/`, since identities are typically created once per domain and
-manifests iterated far more often).
+**The identity-ordering wrinkle, resolved**: DCM authenticates as `GITHUB_DEV_DCM_SVC`, an
+identity *Terraform itself creates*. This is exactly why DCM is chained off Terraform via
+`workflow_run` rather than running independently — DCM genuinely cannot run correctly
+without a prior successful Terraform run, so the two are now guaranteed to execute in that
+order, every time, rather than merely checked for and failed fast on. (An earlier version
+of this pipeline ran Terraform and DCM as fully independent pipelines with a same-job
+"Verify DCM identity is ready" fail-fast check instead of real sequencing — this was
+revisited and replaced with the `workflow_run` chaining described above, per explicit
+requirement that the two tools run one after another.)
 
 ### Mandatory notes
 - `workflow_dispatch:` is enabled on all 4 workflows for manual triggering without needing a
   PR or push.
-- This is deliberately **DEV-only** today — see [Known Limitations](#known-limitations-demo-scope).
+- This is deliberately **DEV-only** for the continuous pipeline above — see
+  [Environments & Versioning](#environments--versioning) for how TEST is promoted to, and
+  [Known Limitations](#known-limitations-demo-scope) for what's still DEV-only.
+
+---
+
+## Environments & Versioning
+
+How "what version is running where" is actually answered, end to end — DEV deploys
+continuously on every merge; TEST (and, in future, PROD) is promoted deliberately, by
+version, with a human approval gate.
+
+### Environment Details
+
+| Environment | How it's reached | Snowflake objects (Customer domain) | GitHub Environment | Approval gate |
+|---|---|---|---|---|
+| DEV | Automatic — every merge to `main` | `DEV_CUSTOMER_DB`, `DEV_CUSTOMER_*_WH`, `DEV_CUSTOMER_*_PRSN` | `DEV-Terraform` / `DEV-DCM` | None (continuous) |
+| TEST | Manual — `promote.yml` dispatched against a specific release tag | `TEST_CUSTOMER_DB`, `TEST_CUSTOMER_*_WH`, `TEST_CUSTOMER_*_PRSN` | `TEST-DCM` | Required reviewer, non-bypassable even by an admin |
+| PROD | Not built yet | — | — | — |
+
+Unlike a branch-per-environment model (one long-lived branch per environment, promotion =
+merging one branch into the next), this repo uses **trunk-based development with
+version-tag promotion**: a single `main` branch, squash-merged, deploying continuously to
+DEV; TEST (and future PROD) are promoted by picking a specific, already-tagged release —
+never "whatever is currently on `main`." This was a deliberate choice, not an oversight:
+it gives an exact, auditable answer to "what's in TEST right now" (a specific tag,
+promoted on a specific date, by a specific approver) that a branch-per-environment model
+can't express as cleanly (there, "what's in TEST" is just "whatever was last merged into
+the `test` branch," with no separate version identifier).
+
+### Branching & Versioning Strategy
+
+```
+feature branch -> PR (Conventional Commits title, required checks) -> squash-merge to main
+                                                                              │
+                                                                              ▼
+                                                              DEV deploys automatically
+                                                                              │
+                                                                              ▼
+                                                    release-please updates one standing
+                                                    "Release PR" (accumulates every merge)
+                                                                              │
+                                              merge the Release PR  (deliberate "cut a
+                                              release" action) ──────────────┘
+                                                                              │
+                                                                              ▼
+                                                      git tag + GitHub Release created
+                                                      (e.g. v1.2.0)
+                                                                              │
+                                                                              ▼
+                                        promote.yml (workflow_dispatch: version, target_environment)
+                                        checks out that EXACT tag, not main's current tip
+                                                                              │
+                                                                              ▼
+                                        TEST-DCM GitHub Environment required-reviewer gate
+                                        (must be explicitly approved, every time)
+                                                                              │
+                                                                              ▼
+                                                        Deployed to TEST
+```
+
+- **PR titles must follow Conventional Commits** (`pr-title-lint.yml`, enforced as a
+  required check) — because this repo squash-merges, the PR title becomes the commit
+  message on `main`, which is the only thing `release-please` reads to compute version
+  bumps (`fix:` → patch, `feat:` → minor, `feat!:`/`BREAKING CHANGE:` → major).
+- **`release-please.yml`** maintains one standing Release PR, updated on every push to
+  `main`, never auto-tagging by itself — merging that PR is the deliberate "cut a
+  release" decision that creates the real tag + GitHub Release.
+- **`promote.yml`** is `workflow_dispatch`-only (never automatic) and always checks out
+  the exact tagged commit, not whatever `main` currently is — so later merges can't
+  silently change what gets deployed to TEST.
+- Repo 2 (`data-ingestion-raw`) and Repo 3 (`customer-domain-dbt`) use the identical
+  pattern (`pr-title-lint.yml`, `release-please.yml`, `promote.yml`), each with their own
+  `TEST-Ingest`/`TEST-dbt` GitHub Environment and required-reviewer gate. Repo 3's
+  `promote.yml` has one structural difference: its actual build logic lives in this
+  repo's `dbt-build-reusable.yml` (`workflow_call`), and a job that calls a reusable
+  workflow can't also run its own `checkout` step — so promoting a specific version there
+  means dispatching `promote.yml` **against that tag as the git ref**
+  (`gh workflow run promote.yml --ref v1.1.0 ...`), not as a workflow input.
+
+### Known limitation: single Snowflake account, naming-prefix isolation
+
+DEV and TEST are isolated by naming convention (`DEV_CUSTOMER_DB` vs. `TEST_CUSTOMER_DB`)
+within **one** Snowflake account, not by separate accounts. This is a real, disclosed
+trade-off, not an oversight — some reference client infrastructure (e.g. AWS-account-per-
+environment models) isolates environments at the account/subscription level instead,
+which is a stronger blast-radius boundary (a credential or policy mistake in one
+environment's account literally cannot reach another environment's resources) at the cost
+of more accounts to provision, more cross-account identity federation, and higher ongoing
+admin overhead. For a demo and for many real platforms, naming-prefix isolation within one
+account is a reasonable, lower-cost choice — but it's a genuine trade-off a client should
+make deliberately, not something this repo silently decided for them. Moving to separate
+accounts per environment would not require redesigning the promotion model above — it
+would mean new per-environment Terraform/DCM identities and connection targets, the same
+pattern already used for TEST, repeated per account.
 
 ---
 
@@ -716,10 +832,11 @@ with valid AWS credentials.
 Disclosed deliberately, not hidden — these are the honest boundaries of what this demo
 build covers:
 
-- **DEV-only (for now — TEST is actively being wired up, see below).** `terraform/env/test/`
-  and `terraform/env/prod/` tfvars/backend configs are scaffolded. Extending to TEST/PROD is
-  a repeatable pattern (new GitHub Environment pair, new OIDC service-user pair, new DCM
-  manifest target) — not a redesign.
+- **DEV is continuous; TEST is promoted deliberately (see [Environments & Versioning](#environments--versioning)); PROD is not built yet.**
+  `terraform/env/prod/` tfvars/backend configs are scaffolded. Extending to PROD is a
+  repeatable pattern (new GitHub Environment pair, new OIDC service-user pair, new DCM
+  manifest target, new `promote.yml` choice) — not a redesign, the exact same steps
+  already taken for TEST.
 - **Masking/row-access policies are inert placeholders**
   (`dcm/sources/definitions/masking.sql`, `row_access.sql`) — pass-through/allow-all,
   pending client-confirmed PII/RLS rules.
@@ -741,5 +858,6 @@ build covers:
 | dbt integration | Repo 3 (`customer-domain-dbt`) — staging → marts | ✅ Implemented and verified end-to-end |
 | Ingestion | Repo 2 (`data-ingestion-raw`) — Snowpipe S3 → RAW | ✅ Implemented and verified end-to-end |
 | Domain #2+ onboarding pattern | `dcm/domains/procurement/manifest.yml` + `_validate_render.py` | 🟡 Template written and render-validated; deliberately not deployed (see "Onboarding a New Domain") |
-| TEST / PROD environments | Second+ environment tier, promotion flow | 🟡 TEST in progress (this session); PROD not started |
+| TEST / PROD environments | Second+ environment tier, promotion flow | ✅ TEST implemented and verified end-to-end (all 3 repos); PROD not started |
+| Semantic versioning & releases | Conventional Commits + `release-please` + tagged promotion | ✅ Implemented and verified end-to-end (all 3 repos) |
 | Schema migrations tooling (schemachange/Flyway) | Versioned migration history beyond DCM's own diffing | ⬜ Not started |
