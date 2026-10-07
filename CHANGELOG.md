@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/radhasgrl/snowflake-platform-tf/compare/v1.1.0...v1.1.1) (2026-10-07)
+
+
+### Bug Fixes
+
+* **terraform:** allow TEST Customer storage integration's external ID ([#40](https://github.com/radhasgrl/snowflake-platform-tf/issues/40)) ([5985b3d](https://github.com/radhasgrl/snowflake-platform-tf/commit/5985b3dd6bac73f725af8b209b113a07bebabfe5))
+
 ## [1.1.0](https://github.com/radhasgrl/snowflake-platform-tf/compare/v1.0.0...v1.1.0) (2026-10-07)
 
 
