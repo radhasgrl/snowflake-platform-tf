@@ -1,0 +1,175 @@
+name: DCM Deploy
+
+# DCM-only — Terraform has its own terraform-apply.yml. See dcm-plan.yml's header comment
+# for the full split rationale and how the Terraform -> DCM identity ordering dependency
+# is handled now that the two tools' pipelines are no longer in the same file (each DCM
+# job below verifies its own identity is ready and fails fast with a clear message if not,
+# instead of relying on a same-file `needs: apply`).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dcm/**"
+      - ".github/workflows/dcm-deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  account-deploy:
+    name: DCM Deploy (account)
+    runs-on: ubuntu-latest
+    environment:
+      name: DEV-DCM
+
+    env:
+      SNOWFLAKE_ACCOUNT: xygpmhm-gq04150
+      SNOWFLAKE_USER: GITHUB_DEV_DCM_SVC
+      SNOWFLAKE_WORKLOAD_IDENTITY_PROVIDER: OIDC
+
+    defaults:
+      run:
+        working-directory: dcm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Snowflake CLI (OIDC)
+        uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
+
+      - name: Create default Snowflake CLI connection (OIDC)
+        run: |
+          snow connection add \
+            --connection-name github \
+            --account "$SNOWFLAKE_ACCOUNT" \
+            --user "$SNOWFLAKE_USER" \
+            --role SYSADMIN \
+            --authenticator WORKLOAD_IDENTITY \
+            --workload-identity-provider OIDC \
+            --default \
+            --no-interactive
+
+      # DCM and Terraform no longer share a workflow file, so there's no same-file `needs:`
+      # to guarantee Terraform created this identity first. This step fails fast with a
+      # clear, actionable message instead of a cryptic OIDC auth error — if
+      # GITHUB_DEV_DCM_SVC doesn't exist yet, authenticating as it is inherently
+      # impossible (Snowflake can't validate a workload-identity token against a user that
+      # isn't there), so this check is really just making that unavoidable failure legible.
+      - name: Verify DCM identity is ready
+        run: |
+          if ! snow sql -q "SELECT CURRENT_USER();" >/tmp/dcm_identity_check.log 2>&1; then
+            echo "::error::Could not authenticate as $SNOWFLAKE_USER. This almost always means Terraform hasn't created this identity yet (see terraform/oidc_service_user.tf) -- run the 'Terraform Apply' workflow first, then re-run this one."
+            cat /tmp/dcm_identity_check.log
+            exit 1
+          fi
+
+      # `snow dcm deploy`/`plan` require the DCM Project object itself to already exist —
+      # unlike `CREATE USER IF NOT EXISTS`-style idempotency elsewhere, DCM has a separate
+      # create step. --if-not-exists makes this safe to run on every deploy.
+      - name: Create DCM project (idempotent)
+        run: snow dcm create --target ACCOUNT --from account --if-not-exists
+
+      - name: DCM Deploy
+        run: snow dcm deploy --target ACCOUNT --from account
+
+  detect-domains:
+    name: Detect Changed Domains
+    runs-on: ubuntu-latest
+    outputs:
+      domains: ${{ steps.detect.outputs.domains }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Only domains listed in dcm/active_domains.json ever get a job here — see the
+      # matching comment in dcm-plan.yml's detect-domains job.
+      - name: Detect which domains changed
+        id: detect
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            DOMAINS=$(bash dcm/detect-changed-domains.sh ALL)
+          else
+            DOMAINS=$(bash dcm/detect-changed-domains.sh "${{ github.event.before }}" "${{ github.sha }}")
+          fi
+          echo "Domains to deploy: $DOMAINS"
+          echo "domains=$DOMAINS" >> "$GITHUB_OUTPUT"
+
+  dcm-deploy:
+    name: DCM Deploy (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    needs: detect-domains
+    if: needs.detect-domains.outputs.domains != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.detect-domains.outputs.domains) }}
+    environment:
+      name: DEV-DCM
+
+    env:
+      SNOWFLAKE_ACCOUNT: xygpmhm-gq04150
+      SNOWFLAKE_USER: GITHUB_DEV_DCM_SVC
+      SNOWFLAKE_WORKLOAD_IDENTITY_PROVIDER: OIDC
+
+    defaults:
+      run:
+        working-directory: dcm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Snowflake CLI (OIDC)
+        uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
+
+      - name: Create default Snowflake CLI connection (OIDC)
+        run: |
+          snow connection add \
+            --connection-name github \
+            --account "$SNOWFLAKE_ACCOUNT" \
+            --user "$SNOWFLAKE_USER" \
+            --role SYSADMIN \
+            --authenticator WORKLOAD_IDENTITY \
+            --workload-identity-provider OIDC \
+            --default \
+            --no-interactive
+
+      # See account-deploy's identical step above for why this exists now that DCM and
+      # Terraform no longer share a workflow file.
+      - name: Verify DCM identity is ready
+        run: |
+          if ! snow sql -q "SELECT CURRENT_USER();" >/tmp/dcm_identity_check.log 2>&1; then
+            echo "::error::Could not authenticate as $SNOWFLAKE_USER. This almost always means Terraform hasn't created this identity yet (see terraform/oidc_service_user.tf) -- run the 'Terraform Apply' workflow first, then re-run this one."
+            cat /tmp/dcm_identity_check.log
+            exit 1
+          fi
+
+      # Synthesizes dcm/domains/<domain>/sources/ from dcm/_template/ (see
+      # dcm/sync-domain.sh) — this is what keeps domain onboarding at zero duplicated SQL.
+      # Never committed; regenerated fresh on every run.
+      - name: Synthesize ${{ matrix.name }} domain sources
+        run: bash sync-domain.sh ${{ matrix.name }}
+
+      # `snow dcm deploy`/`plan` require the DCM Project object itself to already exist —
+      # unlike `CREATE USER IF NOT EXISTS`-style idempotency elsewhere, DCM has a separate
+      # create step. --if-not-exists makes this safe to run on every deploy.
+      - name: Create DCM project (idempotent)
+        run: snow dcm create --target ${{ matrix.target }} --from domains/${{ matrix.name }} --if-not-exists
+
+      - name: DCM Deploy
+        run: snow dcm deploy --target ${{ matrix.target }} --from domains/${{ matrix.name }}
