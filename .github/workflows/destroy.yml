@@ -1,0 +1,231 @@
+name: Destroy (manual, guarded)
+
+# Manual-only, deliberately dangerous — no automatic trigger exists or should ever be
+# added. Every layer below requires the operator to type an exact confirmation phrase
+# matching what they're about to destroy, checked in a separate `guard` job BEFORE any
+# destructive command runs. If the phrase doesn't match, nothing downstream ever executes.
+#
+# Order matters if destroying multiple layers — destroy in this order:
+#   1. dcm-domain (one or more domains)
+#   2. dcm-account
+#   3. terraform (LAST — it owns the OIDC identities every other layer, and Repos 2/3,
+#      authenticate as; destroying it first strands everything else mid-teardown)
+#
+# KNOWN, DISCLOSED RISK — not tested against live infrastructure in this session:
+# `terraform destroy` here runs authenticated AS GITHUB_DEV_TERRAFORM_SVC, and will (among
+# other things) drop that very user. Terraform destroys in reverse-dependency order, so the
+# identity is likely dropped near the end of the run; the already-established OIDC session
+# for this job will likely keep working for the remainder of that same run (Snowflake does
+# not typically force-disconnect an active session when the underlying user row is
+# dropped), but this has not been verified against a real full teardown. If you want a
+# zero-doubt destroy of the Terraform layer, the safer alternative is to run
+# `terraform destroy` locally, authenticated as a human admin (e.g. externalbrowser/MFA),
+# not via this CI identity.
+
+on:
+  workflow_dispatch:
+    inputs:
+      layer:
+        description: "What to destroy"
+        required: true
+        type: choice
+        options:
+          - dcm-domain
+          - dcm-account
+          - terraform
+      domain:
+        description: "Domain name, e.g. customer (only used when layer = dcm-domain)"
+        required: false
+        type: string
+      confirm:
+        description: "Type the EXACT phrase to proceed: dcm-domain -> the domain name; dcm-account -> ACCOUNT; terraform -> DESTROY-TERRAFORM-EVERYTHING"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  guard:
+    name: Confirm destructive intent
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check confirmation phrase matches the chosen layer
+        run: |
+          case "${{ inputs.layer }}" in
+            dcm-domain)
+              EXPECTED="${{ inputs.domain }}"
+              if [ -z "$EXPECTED" ]; then
+                echo "::error::layer=dcm-domain requires the 'domain' input to be set."
+                exit 1
+              fi
+              ;;
+            dcm-account)
+              EXPECTED="ACCOUNT"
+              ;;
+            terraform)
+              EXPECTED="DESTROY-TERRAFORM-EVERYTHING"
+              ;;
+          esac
+          if [ "${{ inputs.confirm }}" != "$EXPECTED" ]; then
+            echo "::error::Confirmation phrase did not match. Expected exactly: '$EXPECTED'. Nothing was destroyed."
+            exit 1
+          fi
+          echo "Confirmation matched for layer=${{ inputs.layer }} -- proceeding."
+
+  destroy-dcm-domain:
+    name: Destroy DCM domain (${{ inputs.domain }})
+    needs: guard
+    if: inputs.layer == 'dcm-domain'
+    runs-on: ubuntu-latest
+    environment:
+      name: DEV-DCM
+
+    env:
+      SNOWFLAKE_ACCOUNT: xygpmhm-gq04150
+      SNOWFLAKE_USER: GITHUB_DEV_DCM_SVC
+      SNOWFLAKE_WORKLOAD_IDENTITY_PROVIDER: OIDC
+
+    defaults:
+      run:
+        working-directory: dcm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # Looks the domain's DCM target name up from active_domains.json rather than
+      # guessing a naming convention — keeps this in sync automatically with however
+      # domains are actually registered, including ones not following the DOMAIN ->
+      # DOMAIN-uppercased pattern.
+      - name: Resolve domain target name
+        id: resolve
+        run: |
+          TARGET=$(jq -r --arg name "${{ inputs.domain }}" '.[] | select(.name == $name) | .target' active_domains.json)
+          if [ -z "$TARGET" ]; then
+            echo "::error::Domain '${{ inputs.domain }}' is not in active_domains.json -- nothing to destroy, or it was never deployed."
+            exit 1
+          fi
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Snowflake CLI (OIDC)
+        uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
+
+      - name: Create default Snowflake CLI connection (OIDC)
+        run: |
+          snow connection add \
+            --connection-name github \
+            --account "$SNOWFLAKE_ACCOUNT" \
+            --user "$SNOWFLAKE_USER" \
+            --role SYSADMIN \
+            --authenticator WORKLOAD_IDENTITY \
+            --workload-identity-provider OIDC \
+            --default \
+            --no-interactive
+
+      - name: Synthesize domain sources (purge needs the project's source tree resolvable)
+        run: bash sync-domain.sh ${{ inputs.domain }}
+
+      # Drops every object this domain's DCM project manages (database, schemas,
+      # warehouses, roles) -- NOT the project object itself, which stays behind empty and
+      # can be re-deployed into later.
+      - name: DCM Purge
+        run: snow dcm purge --target ${{ steps.resolve.outputs.target }} --from domains/${{ inputs.domain }} --force
+
+  destroy-dcm-account:
+    name: Destroy DCM account project
+    needs: guard
+    if: inputs.layer == 'dcm-account'
+    runs-on: ubuntu-latest
+    environment:
+      name: DEV-DCM
+
+    env:
+      SNOWFLAKE_ACCOUNT: xygpmhm-gq04150
+      SNOWFLAKE_USER: GITHUB_DEV_DCM_SVC
+      SNOWFLAKE_WORKLOAD_IDENTITY_PROVIDER: OIDC
+
+    defaults:
+      run:
+        working-directory: dcm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Snowflake CLI (OIDC)
+        uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
+
+      - name: Create default Snowflake CLI connection (OIDC)
+        run: |
+          snow connection add \
+            --connection-name github \
+            --account "$SNOWFLAKE_ACCOUNT" \
+            --user "$SNOWFLAKE_USER" \
+            --role SYSADMIN \
+            --authenticator WORKLOAD_IDENTITY \
+            --workload-identity-provider OIDC \
+            --default \
+            --no-interactive
+
+      # Drops DEV_DEPLOY_WH -- the account-level project's only managed object today.
+      - name: DCM Purge
+        run: snow dcm purge --target ACCOUNT --from account --force
+
+  destroy-terraform:
+    name: Destroy Terraform-managed resources
+    needs: guard
+    if: inputs.layer == 'terraform'
+    runs-on: ubuntu-latest
+    environment:
+      name: DEV-Terraform
+
+    env:
+      TF_VAR_snowflake_organization_name: xygpmhm
+      TF_VAR_snowflake_account_name: gq04150
+      TARGET_ENV: dev
+
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::525218385225:role/snowflake-platform-tf-github-oidc
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.0"
+
+      - name: Fetch Snowflake OIDC token
+        run: |
+          TOKEN=$(curl -sSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=snowflakecomputing.com" | jq -r '.value')
+          echo "::add-mask::$TOKEN"
+          echo "SNOWFLAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+
+      - name: Terraform Init
+        run: terraform init -backend-config="env/${{ env.TARGET_ENV }}/backend.hcl"
+
+      # See this file's header comment for the known, disclosed risk of running this
+      # specific command via CI (self-authenticating-identity teardown).
+      - name: Terraform Destroy
+        run: terraform destroy -var-file="env/${{ env.TARGET_ENV }}/${{ env.TARGET_ENV }}.tfvars" -auto-approve
