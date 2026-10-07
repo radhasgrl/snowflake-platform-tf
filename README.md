@@ -463,7 +463,7 @@ version, with a human approval gate.
 | Environment | How it's reached | Snowflake objects (Customer domain) | GitHub Environment | Approval gate |
 |---|---|---|---|---|
 | DEV | Automatic — every merge to `main` | `DEV_CUSTOMER_DB`, `DEV_CUSTOMER_*_WH`, `DEV_CUSTOMER_*_PRSN` | `DEV-Terraform` / `DEV-DCM` | None (continuous) |
-| TEST | Manual — `promote.yml` dispatched against a specific release tag | `TEST_CUSTOMER_DB`, `TEST_CUSTOMER_*_WH`, `TEST_CUSTOMER_*_PRSN` | `TEST-DCM` | Required reviewer, non-bypassable even by an admin |
+| TEST | Manual — `promote.yml` dispatched against a specific release tag (Terraform, then DCM) | `TEST_CUSTOMER_DB`, `TEST_CUSTOMER_*_WH`, `TEST_CUSTOMER_*_PRSN` | `TEST-Terraform` / `TEST-DCM` | Required reviewer, non-bypassable even by an admin |
 | PROD | Not built yet | — | — | — |
 
 Unlike a branch-per-environment model (one long-lived branch per environment, promotion =
@@ -500,8 +500,10 @@ feature branch -> PR (Conventional Commits title, required checks) -> squash-mer
                                         checks out that EXACT tag, not main's current tip
                                                                               │
                                                                               ▼
-                                        TEST-DCM GitHub Environment required-reviewer gate
-                                        (must be explicitly approved, every time)
+                                        TEST-Terraform gate -> terraform apply (env/test/)
+                                        TEST-DCM gate -> snow dcm deploy (same tag's content)
+                                        (same Terraform-then-DCM order as the DEV pipeline,
+                                        each step its own required-reviewer approval)
                                                                               │
                                                                               ▼
                                                         Deployed to TEST
@@ -516,7 +518,17 @@ feature branch -> PR (Conventional Commits title, required checks) -> squash-mer
   release" decision that creates the real tag + GitHub Release.
 - **`promote.yml`** is `workflow_dispatch`-only (never automatic) and always checks out
   the exact tagged commit, not whatever `main` currently is — so later merges can't
-  silently change what gets deployed to TEST.
+  silently change what gets deployed to TEST. **Terraform is promoted by the same tag as
+  DCM**, not just DCM: every platform resource (`oidc_service_user.tf`, `dcm_home.tf`,
+  `domain_identities.tf`/`domain_identities_test.tf`) is gated with
+  `count = local.env == "<TIER>" ? 1 : 0`, so the identical root module, applied against
+  `env/test/` and its own state file (`workload/test/terraform.tfstate`), manages only
+  TEST-tier resources — the same one-codebase-many-environments pattern HashiCorp
+  documents for multi-environment Terraform
+  ([Recommended Practices](https://developer.hashicorp.com/terraform/cloud-docs/recommended-practices)).
+  The shared ingestion AWS infra (`ingestion_aws_infra.tf`: one S3 bucket, one set of IAM
+  roles) stays DEV-pipeline-owned only — there's one AWS account for this whole platform,
+  nothing environment-specific to promote there.
 - Repo 2 (`data-ingestion-raw`) and Repo 3 (`customer-domain-dbt`) use the identical
   pattern (`pr-title-lint.yml`, `release-please.yml`, `promote.yml`), each with their own
   `TEST-Ingest`/`TEST-dbt` GitHub Environment and required-reviewer gate. Repo 3's
