@@ -23,96 +23,6 @@ permissions:
   id-token: write
 
 jobs:
-  # Account-level DCM project — genuinely platform-wide (one warehouse for CI/platform
-  # tooling), never repeated per domain. Always runs on every plan, unlike the per-domain
-  # matrix below, since there's exactly one of this project and it rarely changes.
-  account-plan:
-    name: DCM Plan (account)
-    runs-on: ubuntu-latest
-    environment:
-      name: DEV-DCM
-
-    env:
-      SNOWFLAKE_ACCOUNT: xygpmhm-gq04150
-      SNOWFLAKE_USER: GITHUB_DEV_DCM_SVC
-      SNOWFLAKE_WORKLOAD_IDENTITY_PROVIDER: OIDC
-
-    defaults:
-      run:
-        working-directory: dcm
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - name: Setup Snowflake CLI (OIDC)
-        uses: snowflakedb/snowflake-actions@v3
-        with:
-          use-oidc: true
-
-      - name: Create default Snowflake CLI connection (OIDC)
-        run: |
-          snow connection add \
-            --connection-name github \
-            --account "$SNOWFLAKE_ACCOUNT" \
-            --user "$SNOWFLAKE_USER" \
-            --role SYSADMIN \
-            --authenticator WORKLOAD_IDENTITY \
-            --workload-identity-provider OIDC \
-            --default \
-            --no-interactive
-
-      # DCM and Terraform no longer share a workflow file, so there's no same-file `needs:`
-      # to guarantee Terraform created this identity first. This step fails fast with a
-      # clear, actionable message instead of a cryptic OIDC auth error — if
-      # GITHUB_DEV_DCM_SVC doesn't exist yet, authenticating as it is inherently
-      # impossible (Snowflake can't validate a workload-identity token against a user that
-      # isn't there), so this check is really just making that unavoidable failure legible.
-      - name: Verify DCM identity is ready
-        run: |
-          if ! snow sql -q "SELECT CURRENT_USER();" >/tmp/dcm_identity_check.log 2>&1; then
-            echo "::error::Could not authenticate as $SNOWFLAKE_USER. This almost always means Terraform hasn't created this identity yet (see terraform/oidc_service_user.tf) -- run the 'Terraform Apply' workflow first, then re-run this one."
-            cat /tmp/dcm_identity_check.log
-            exit 1
-          fi
-
-      # `snow dcm plan`/`deploy` require the DCM Project object itself to already exist —
-      # --if-not-exists makes this safe to run on every plan, including the very first one.
-      - name: Create DCM project (idempotent)
-        run: snow dcm create --target ACCOUNT --from account --if-not-exists
-
-      - name: DCM Plan
-        id: dcm_plan
-        # set -o pipefail is essential here: without it, `cmd | tee file`'s exit code is
-        # tee's (always 0), not snow dcm plan's -- which would silently mask a real plan
-        # failure as success (continue-on-error only catches it if the step's own exit code
-        # is non-zero).
-        run: |
-          set -o pipefail
-          snow dcm plan --target ACCOUNT --from account 2>&1 | tee dcm_plan_account_output.txt
-        continue-on-error: true
-
-      - name: Post DCM plan as PR comment
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const plan = fs.readFileSync('dcm/dcm_plan_account_output.txt', 'utf8');
-            const truncated = plan.length > 60000 ? plan.slice(0, 60000) + '\n\n...output truncated' : plan;
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `## DCM Plan (DEV, account)\n\`\`\`\n${truncated}\n\`\`\``
-            });
-
-      - name: Fail if DCM plan failed
-        if: steps.dcm_plan.outcome == 'failure'
-        run: exit 1
-
   detect-domains:
     name: Detect Changed Domains
     runs-on: ubuntu-latest
@@ -185,8 +95,10 @@ jobs:
             --default \
             --no-interactive
 
-      # See account-plan's identical step above for why this exists now that DCM and
-      # Terraform no longer share a workflow file.
+      # DCM and Terraform no longer share a workflow file, so there's no same-file `needs:`
+      # to guarantee Terraform created this identity first. This step fails fast with a
+      # clear, actionable message instead of a cryptic OIDC auth error -- if
+      # GITHUB_DEV_DCM_SVC doesn't exist yet, authenticating as it is inherently impossible.
       - name: Verify DCM identity is ready
         run: |
           if ! snow sql -q "SELECT CURRENT_USER();" >/tmp/dcm_identity_check.log 2>&1; then
@@ -208,7 +120,10 @@ jobs:
 
       - name: DCM Plan
         id: dcm_plan
-        # See account-plan's identical comment above re: set -o pipefail.
+        # set -o pipefail is essential here: without it, `cmd | tee file`'s exit code is
+        # tee's (always 0), not snow dcm plan's -- which would silently mask a real plan
+        # failure as success (continue-on-error only catches it if the step's own exit code
+        # is non-zero).
         run: |
           set -o pipefail
           snow dcm plan --target ${{ matrix.target }} --from domains/${{ matrix.name }} 2>&1 | tee dcm_plan_output.txt
@@ -232,3 +147,35 @@ jobs:
       - name: Fail if DCM plan failed
         if: steps.dcm_plan.outcome == 'failure'
         run: exit 1
+
+  # Fan-in gate: the only one of DCM's checks with a fixed, predictable name, so it's the
+  # only one that can be set as a GitHub branch-protection required status check. A matrix
+  # job (dcm-plan above) produces a differently-named check per domain
+  # (`DCM Plan (customer)`, `DCM Plan (procurement)`, ...) -- GitHub's required-status-check
+  # mechanism can't express "require whichever of these dynamically-named jobs ran", so this
+  # job exists purely to translate the real matrix outcome into one stable, requireable name.
+  #
+  # `if: always()` is essential: without it, this job would be silently skipped whenever
+  # detect-domains or dcm-plan failed (GitHub's default behavior for a job whose `needs`
+  # failed), and a skipped required check is not the same as a verified-passing one -- the
+  # exact class of bug already found and fixed once this session (a stale required check
+  # name that could never be satisfied). `always()` plus the explicit result checks below
+  # make sure this job actually fails loudly instead of quietly vanishing.
+  dcm-plan-gate:
+    name: DCM Plan (gate)
+    runs-on: ubuntu-latest
+    needs: [detect-domains, dcm-plan]
+    if: always()
+    steps:
+      - name: Check DCM plan results
+        run: |
+          if [ "${{ needs.detect-domains.result }}" = "failure" ]; then
+            echo "::error::detect-domains failed (e.g. malformed active_domains.json or a script bug) -- no domain could be planned, this must block merge."
+            exit 1
+          fi
+          if [ "${{ needs.dcm-plan.result }}" = "failure" ]; then
+            echo "::error::One or more domain DCM plans failed -- see the DCM Plan (<domain>) job(s) above for details."
+            exit 1
+          fi
+          echo "DCM plan gate OK (detect-domains: ${{ needs.detect-domains.result }}, dcm-plan: ${{ needs.dcm-plan.result }})."
+

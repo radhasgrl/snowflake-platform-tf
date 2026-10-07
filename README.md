@@ -56,8 +56,8 @@ Developer / PR
 GitHub Actions (CI/CD) — 2 independent pipelines, one per engine, each its own files
  ├── terraform-plan.yml   (PR)    → plan job (terraform/)
  ├── terraform-apply.yml  (push)  → apply job (terraform/)
- ├── dcm-plan.yml         (PR)    → account-plan + detect-domains + dcm-plan jobs (dcm/)
- └── dcm-deploy.yml       (push)  → account-deploy + detect-domains + dcm-deploy jobs (dcm/)
+ ├── dcm-plan.yml         (PR)    → detect-domains + dcm-plan + dcm-plan-gate jobs (dcm/)
+ └── dcm-deploy.yml       (push)  → detect-domains + dcm-deploy jobs (dcm/)
           │
           ├── Terraform: fetches state from S3 (ap-southeast-2), authenticates to
           │   Snowflake via GitHub OIDC / WORKLOAD_IDENTITY (no stored keys) and to AWS via
@@ -136,11 +136,6 @@ Nothing Terraform-related lives outside `terraform/`; nothing DCM-related lives 
 │   └── .terraform-version            # Pins Terraform to 1.16.0
 │
 ├── dcm/
-│   ├── account/                       # Account-level DCM project — genuinely
-│   │   ├── manifest.yml               #   platform-wide (one CI/tooling warehouse),
-│   │   └── sources/definitions/       #   hand-written (never repeated per domain, so no
-│   │       └── warehouses.sql         #   templating needed) — matches the infra-platform
-│   │                                 #   reference's own account-level dcm/manifest.yml.
 │   ├── sources/                      # THE canonical, domain-agnostic template — never
 │   │   ├── definitions/              #   duplicated per domain. Fully Jinja2-templated.
 │   │   │   ├── databases.sql
@@ -181,10 +176,10 @@ Nothing Terraform-related lives outside `terraform/`; nothing DCM-related lives 
 │   └── workflows/
 │       ├── terraform-plan.yml        # Terraform-only: fmt/validate/plan, on PRs touching terraform/**
 │       ├── terraform-apply.yml       # Terraform-only: apply, on push to main touching terraform/**
-│       ├── dcm-plan.yml              # DCM-only: account-plan + detect-domains + dcm-plan
-│       │                             #   matrix job(s), on PRs touching dcm/**
-│       ├── dcm-deploy.yml            # DCM-only: account-deploy + detect-domains + dcm-deploy
-│       │                             #   matrix job(s), on push to main touching dcm/**
+│       ├── dcm-plan.yml              # DCM-only: detect-domains + dcm-plan matrix job(s) +
+│       │                             #   dcm-plan-gate, on PRs touching dcm/**
+│       ├── dcm-deploy.yml            # DCM-only: detect-domains + dcm-deploy matrix job(s),
+│       │                             #   on push to main touching dcm/**
 │       └── dbt-build-reusable.yml    # workflow_call — centrally-maintained dbt build logic
 │                                     #   called by every per-domain dbt repo (Repo 3+)
 │
@@ -345,8 +340,8 @@ service user's `WORKLOAD_IDENTITY` auth, with the OIDC token fetched fresh insid
 |---|---|---|
 | `.github/workflows/terraform-plan.yml` | Pull Request touching `terraform/**` | `terraform fmt -check` + `validate` + `plan` (posted as PR comment) |
 | `.github/workflows/terraform-apply.yml` | Push to `main` touching `terraform/**` | `Terraform Apply` |
-| `.github/workflows/dcm-plan.yml` | Pull Request touching `dcm/**` | `DCM Plan (account)` + `DCM Plan (<domain>)` matrix (posted as PR comments) |
-| `.github/workflows/dcm-deploy.yml` | Push to `main` touching `dcm/**` | `DCM Deploy (account)` + `DCM Deploy (<domain>)` matrix |
+| `.github/workflows/dcm-plan.yml` | Pull Request touching `dcm/**` | `DCM Plan (<domain>)` matrix + `DCM Plan (gate)` (posted as PR comments) |
+| `.github/workflows/dcm-deploy.yml` | Push to `main` touching `dcm/**` | `DCM Deploy (<domain>)` matrix |
 
 **Terraform and DCM are two fully independent pipelines**, not one combined pipeline —
 deliberately split into separate files (see "Why Terraform and DCM are separate pipelines"
@@ -361,11 +356,12 @@ Pull Request touching terraform/**
 
 Pull Request touching dcm/**
   └─► dcm-plan.yml
-        ├── account-plan job:   snow dcm plan --target ACCOUNT --from account → posts PR comment
-        │                       (always runs — one account-level project, not domain-gated)
         ├── detect-domains job: diffs changed files against dcm/active_domains.json
-        └── dcm-plan job(s):    one per changed active domain (matrix) → snow dcm plan → posts PR comment
-             (account-plan/detect-domains run in parallel; dcm-plan needs detect-domains)
+        ├── dcm-plan job(s):    one per changed active domain (matrix) → snow dcm plan → posts PR comment
+        └── dcm-plan-gate job:  fan-in job with a fixed name (needs: [detect-domains,
+                                 dcm-plan], if: always()) — the ONE check branch protection
+                                 can require, since matrix job names vary per domain and
+                                 GitHub can't require a dynamically-named check directly
 
 Push to main touching terraform/**
   └─► terraform-apply.yml
@@ -373,7 +369,6 @@ Push to main touching terraform/**
 
 Push to main touching dcm/**
   └─► dcm-deploy.yml
-        ├── account-deploy job: snow dcm deploy --target ACCOUNT --from account
         ├── detect-domains job: same diff logic as above
         └── dcm-deploy job(s):  one per changed active domain (matrix) → snow dcm deploy
 ```
@@ -395,7 +390,7 @@ They used to live in two combined files (`terraform-plan.yml`/`terraform-apply.y
 contained the DCM jobs). Split apart because:
 
 - **Misleading naming**: a file named `terraform-plan.yml` containing jobs called
-  `DCM Plan (account)` is confusing on its own.
+  `DCM Plan (customer)` is confusing on its own.
 - **CODEOWNERS can't route by concern while files are shared** — `/terraform/` and `/dcm/`
   are owned by different teams at the source level; the workflow files now match that.
 - **Wasted CI**: the combined files triggered on `paths: [terraform/**, dcm/**]` (an OR) —
@@ -450,10 +445,9 @@ same restraint.
 Destroying is a human-operated, local-only runbook instead — authenticated as yourself
 (MFA-gated `externalbrowser`/admin login), not via a CI service identity.
 
-**Destroy in this order** if tearing down multiple layers: DCM domain(s) first, then the
-DCM account project, then Terraform **last** — Terraform owns the identities every other
-layer (and Repos 2/3) authenticate as, so destroying it first strands everything else
-mid-teardown.
+**Destroy in this order** if tearing down multiple layers: DCM domain(s) first, then
+Terraform **last** — Terraform owns the identities every other layer (and Repos 2/3)
+authenticate as, so destroying it first strands everything else mid-teardown.
 
 ### 1. One domain's DCM objects
 
@@ -468,15 +462,10 @@ snow dcm purge --target CUSTOMER --from domains/customer --force -c manual_admin
 Drops that domain's database, schemas, warehouses, and roles — **not** the DCM project
 object itself, which stays behind empty and can be redeployed into later.
 
-### 2. The DCM account project
+(There is no account-level DCM project to destroy anymore — see "History" below for why
+the `dcm/account/` project that used to live here was removed entirely.)
 
-```powershell
-snow dcm purge --target ACCOUNT --from account --force -c manual_admin
-```
-
-Drops `DEV_DEPLOY_WH` — the account-level project's only managed object today.
-
-### 3. Terraform (last, and the one genuine technical wrinkle)
+### 2. Terraform (last, and the one genuine technical wrinkle)
 
 `terraform/providers.tf` hardcodes `authenticator = "WORKLOAD_IDENTITY"` on every Snowflake
 provider block — which, per the "Local Terraform verification" note above, **only works
@@ -553,6 +542,22 @@ platform doesn't currently have any). The current, live definitions for all of t
 `roles.sql`, `database_roles.sql`, and `grants.sql`, with the actual per-domain values in
 `dcm/domains/customer/manifest.yml` — treat those files, not this table, as the source of
 truth going forward.
+
+A separate, account-level DCM project (`dcm/account/`) was also introduced for a while, to
+hold one genuinely platform-wide, hand-written (non-templated) object — `DEV_DEPLOY_WH`, a
+CI/tooling warehouse, matching the infra-platform reference's own account-level
+`dcm/manifest.yml` convention. It was removed after confirming (via grep across every
+workflow) that nothing ever actually referenced it: every Terraform/DCM CI connection runs
+with no explicit `--warehouse` at all, since those tools' operations are metadata/DDL only
+and don't require active compute. Rather than leave an unused, undocumented resource in the
+platform ahead of a client demo, it was decommissioned in two steps — first dropped
+declaratively via a normal `snow dcm plan`/`deploy` (removing its SQL definition so DCM
+planned and applied the `DROP WAREHOUSE` itself), then the now-empty DCM project object was
+purged by hand (`snow dcm purge --target ACCOUNT --from account`, human-authenticated, the
+same local-only pattern as "Destroying / Decommissioning Resources" above) before deleting
+`dcm/account/` and its `account-plan`/`account-deploy` CI jobs from the repo entirely. The
+account-level pattern itself is still sound (and matches the reference) — it simply isn't
+needed again until a genuine platform-wide object actually exists to put there.
 
 ---
 

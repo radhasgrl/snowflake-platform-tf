@@ -1,6 +1,0 @@
--- Intentionally empty. DCM requires at least one .sql/.yaml/.yml file to exist under
--- sources/definitions/ for its project to compile at all, even when there are currently
--- zero account-level objects to define (see git history: this file was added when the only
--- previous object, DEV_DEPLOY_WH, was removed as dead/unused weight). Add real DEFINE
--- statements here (or new files alongside it) the next time a genuinely account-wide,
--- never-repeated-per-domain object is actually needed.
