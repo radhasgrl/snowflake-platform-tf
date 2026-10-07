@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.2.0](https://github.com/radhasgrl/snowflake-platform-tf/compare/v1.1.1...v1.2.0) (2026-10-07)
+
+
+### Features
+
+* **ci:** sequence Terraform before DCM, one after another, per client direction ([#42](https://github.com/radhasgrl/snowflake-platform-tf/issues/42)) ([260f46b](https://github.com/radhasgrl/snowflake-platform-tf/commit/260f46bf9a5e9bee579132e36bb656ffacbf424d))
+* **docs:** adopt CI/CD best practices reviewed from a reference client repo ([#47](https://github.com/radhasgrl/snowflake-platform-tf/issues/47)) ([57c2a49](https://github.com/radhasgrl/snowflake-platform-tf/commit/57c2a49cbcd510c040f6bfa52d7f9306318d1fe2))
+
+
+### Bug Fixes
+
+* **ci:** dcm-deploy.yml working-directory bug before checkout ([#44](https://github.com/radhasgrl/snowflake-platform-tf/issues/44)) ([f2072ee](https://github.com/radhasgrl/snowflake-platform-tf/commit/f2072ee197e9bf8d649bd414986f860aaa0d3f3d))
+* **ci:** show the no-op message when DCM plan output is empty ([#46](https://github.com/radhasgrl/snowflake-platform-tf/issues/46)) ([0d2efb0](https://github.com/radhasgrl/snowflake-platform-tf/commit/0d2efb0a83ec62941c2fb074db3d2ec840ce0402))
+
 ## [1.1.1](https://github.com/radhasgrl/snowflake-platform-tf/compare/v1.1.0...v1.1.1) (2026-10-07)
 
 
