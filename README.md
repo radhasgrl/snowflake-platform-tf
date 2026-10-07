@@ -52,9 +52,11 @@ trunk-based TEST/UAT/PROD promotion flow doesn't require re-architecting the ide
 Developer / PR
      │
      ▼
-GitHub Actions (CI/CD) — single pipeline, two engines, sequential jobs
- ├── terraform-plan.yml   (PR)    → plan job (terraform/) → dcm-plan job (dcm/, needs: plan)
- └── terraform-apply.yml  (push)  → apply job (terraform/) → dcm-deploy job (dcm/, needs: apply)
+GitHub Actions (CI/CD) — 2 independent pipelines, one per engine, each its own files
+ ├── terraform-plan.yml   (PR)    → plan job (terraform/)
+ ├── terraform-apply.yml  (push)  → apply job (terraform/)
+ ├── dcm-plan.yml         (PR)    → account-plan + detect-domains + dcm-plan jobs (dcm/)
+ └── dcm-deploy.yml       (push)  → account-deploy + detect-domains + dcm-deploy jobs (dcm/)
           │
           ├── Terraform: fetches state from S3 (ap-southeast-2), authenticates to
           │   Snowflake via GitHub OIDC / WORKLOAD_IDENTITY (no stored keys) and to AWS via
@@ -63,7 +65,9 @@ GitHub Actions (CI/CD) — single pipeline, two engines, sequential jobs
           └── DCM (snow CLI): authenticates as GITHUB_DEV_DCM_SVC via the same OIDC pattern —
               creates/updates databases, schemas, warehouses, tiered RBAC roles
               (persona -> functional -> database/warehouse roles), grants, and placeholder
-              masking/row-access policies
+              masking/row-access policies. Each DCM job verifies its own identity exists
+              before proceeding (see "CI/CD Pipeline" below) — DCM and Terraform are fully
+              independent pipelines now, not sequenced via a same-file `needs:`.
 
 AWS (ap-southeast-2 / Sydney)
  ├── S3 bucket: snowflake-platform-tf-state-525218385225
@@ -172,14 +176,18 @@ Nothing Terraform-related lives outside `terraform/`; nothing DCM-related lives 
 │                                     #   immediately before every snow dcm plan/deploy
 │
 ├── .github/
-│   ├── CODEOWNERS                    # /terraform/ -> platform; /dcm/ -> data engineering
+│   ├── CODEOWNERS                    # /terraform/ + terraform-*.yml -> platform;
+│   │                                 #   /dcm/ + dcm-*.yml -> data engineering
 │   ├── pull_request_template.md      # Layer(s) Affected + validation checklist
 │   └── workflows/
-│       ├── terraform-plan.yml        # plan job (terraform/) + detect-domains + dcm-plan
-│       │                             #   matrix job(s) (dcm/, one per changed active
-│       │                             #   domain), on Pull Requests
-│       └── terraform-apply.yml       # apply job (terraform/) + detect-domains + dcm-deploy
-│                                     #   matrix job(s) (dcm/, needs: apply), on merge to main
+│       ├── terraform-plan.yml        # Terraform-only: fmt/validate/plan, on PRs touching terraform/**
+│       ├── terraform-apply.yml       # Terraform-only: apply, on push to main touching terraform/**
+│       ├── dcm-plan.yml              # DCM-only: account-plan + detect-domains + dcm-plan
+│       │                             #   matrix job(s), on PRs touching dcm/**
+│       ├── dcm-deploy.yml            # DCM-only: account-deploy + detect-domains + dcm-deploy
+│       │                             #   matrix job(s), on push to main touching dcm/**
+│       └── dbt-build-reusable.yml    # workflow_call — centrally-maintained dbt build logic
+│                                     #   called by every per-domain dbt repo (Repo 3+)
 │
 ├── .gitignore
 └── README.md
@@ -336,26 +344,39 @@ service user's `WORKLOAD_IDENTITY` auth, with the OIDC token fetched fresh insid
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `.github/workflows/terraform-plan.yml` | Pull Request | `terraform fmt -check` + `validate` + `plan` (posted as PR comment) **and** `DCM Plan` (parallel job) |
-| `.github/workflows/terraform-apply.yml` | Push to `main` | `Terraform Apply`, then `DCM Deploy` (`needs: apply` — DCM can't authenticate until Terraform's identities exist) |
+| `.github/workflows/terraform-plan.yml` | Pull Request touching `terraform/**` | `terraform fmt -check` + `validate` + `plan` (posted as PR comment) |
+| `.github/workflows/terraform-apply.yml` | Push to `main` touching `terraform/**` | `Terraform Apply` |
+| `.github/workflows/dcm-plan.yml` | Pull Request touching `dcm/**` | `DCM Plan (account)` + `DCM Plan (<domain>)` matrix (posted as PR comments) |
+| `.github/workflows/dcm-deploy.yml` | Push to `main` touching `dcm/**` | `DCM Deploy (account)` + `DCM Deploy (<domain>)` matrix |
+
+**Terraform and DCM are two fully independent pipelines**, not one combined pipeline —
+deliberately split into separate files (see "Why Terraform and DCM are separate pipelines"
+below). A PR touching only `dcm/` never triggers a Terraform plan, and vice versa; each
+tool's CI load, PR-check naming, and CODEOWNERS routing stay scoped to what actually
+changed.
 
 ```
-Pull Request opened
+Pull Request touching terraform/**
   └─► terraform-plan.yml
-        ├── plan job:             fetches Snowflake OIDC token → terraform plan → posts PR comment
-        ├── account-plan job:     snow dcm plan --target ACCOUNT --from account → posts PR comment
-        │                         (always runs — one account-level project, not domain-gated)
-        ├── detect-domains job:   diffs changed files against dcm/active_domains.json
-        └── dcm-plan job(s):      one per changed active domain (matrix) → snow dcm plan → posts PR comment
-             (plan/account-plan/detect-domains run in parallel; dcm-plan needs detect-domains;
-              plan is read-only in both engines)
+        └── plan job: fetches Snowflake OIDC token → terraform plan → posts PR comment
 
-PR merged to main
+Pull Request touching dcm/**
+  └─► dcm-plan.yml
+        ├── account-plan job:   snow dcm plan --target ACCOUNT --from account → posts PR comment
+        │                       (always runs — one account-level project, not domain-gated)
+        ├── detect-domains job: diffs changed files against dcm/active_domains.json
+        └── dcm-plan job(s):    one per changed active domain (matrix) → snow dcm plan → posts PR comment
+             (account-plan/detect-domains run in parallel; dcm-plan needs detect-domains)
+
+Push to main touching terraform/**
   └─► terraform-apply.yml
-        ├── apply job:            terraform apply -auto-approve
-        ├── account-deploy job:   needs: apply — snow dcm deploy --target ACCOUNT --from account
-        ├── detect-domains job:   needs: apply — same diff logic as above
-        └── dcm-deploy job(s):    one per changed active domain (matrix) → snow dcm deploy
+        └── apply job: terraform apply -auto-approve
+
+Push to main touching dcm/**
+  └─► dcm-deploy.yml
+        ├── account-deploy job: snow dcm deploy --target ACCOUNT --from account
+        ├── detect-domains job: same diff logic as above
+        └── dcm-deploy job(s):  one per changed active domain (matrix) → snow dcm deploy
 ```
 
 A domain only ever gets a `dcm-plan`/`dcm-deploy` job if (a) its own `dcm/domains/<domain>/`
@@ -365,12 +386,49 @@ scale into the hundreds — a PR touching one domain's manifest never replans/re
 other domain too. See `dcm/detect-changed-domains.sh` and README's "Onboarding a New Domain"
 section.
 
-Both workflows run under GitHub Environments `DEV-Terraform` and `DEV-DCM` respectively —
+Each workflow runs under its own GitHub Environment (`DEV-Terraform` or `DEV-DCM`) —
 visible under **Settings → Environments** in the GitHub UI, each scoped to its own OIDC
 service-user subject claim.
 
+### Why Terraform and DCM are separate pipelines
+
+They used to live in two combined files (`terraform-plan.yml`/`terraform-apply.yml` also
+contained the DCM jobs). Split apart because:
+
+- **Misleading naming**: a file named `terraform-plan.yml` containing jobs called
+  `DCM Plan (account)` is confusing on its own.
+- **CODEOWNERS can't route by concern while files are shared** — `/terraform/` and `/dcm/`
+  are owned by different teams at the source level; the workflow files now match that.
+- **Wasted CI**: the combined files triggered on `paths: [terraform/**, dcm/**]` (an OR) —
+  a DCM-only PR still ran a real `terraform plan` unconditionally. Each file's own path
+  filter now scopes it to only the tool that actually changed.
+- **Blast radius**: a typo in one tool's job definition can no longer affect the other's
+  file/PR/review.
+
+**The one real engineering wrinkle**: DCM authenticates as `GITHUB_DEV_DCM_SVC`, an
+identity *Terraform itself creates*. In the combined file, `dcm-deploy` had `needs: apply`
+to guarantee ordering. Splitting into separate files loses that free, same-file ordering
+guarantee — so every DCM job now has its own **"Verify DCM identity is ready"** step that
+authenticates and fails fast with a clear, actionable message
+(`Terraform hasn't created this identity yet — run 'Terraform Apply' first`) instead of a
+cryptic OIDC error, if the identity doesn't exist yet. This isn't a workaround: OIDC
+workload-identity auth against a nonexistent user fails inherently — Snowflake has no way
+to validate a token against a user that was never created — so this check simply converts
+an unavoidable failure into a legible one. The trade-off: onboarding a domain that needs
+*both* a brand-new identity (Terraform) *and* a brand-new manifest (DCM) in the same commit
+means the two pipelines run concurrently rather than strictly sequenced — if DCM's job
+happens to start before Terraform's finishes, it fails fast with the message above, and the
+fix is a one-click workflow re-run. This is deliberately simpler than the alternative
+(chaining `dcm-deploy.yml` off `terraform-apply.yml`'s completion via a `workflow_run`
+trigger), which would restore automatic sequencing but adds real cross-workflow complexity
+(separate trigger semantics, needing to check out `github.event.workflow_run.head_sha`
+explicitly, and a real risk of double-triggering DCM deploy when both tools' paths change
+in the same commit) for a case that's rare in steady-state domain operation (most day-to-day
+changes touch only `dcm/`, since identities are typically created once per domain and
+manifests iterated far more often).
+
 ### Mandatory notes
-- `workflow_dispatch:` is enabled on both workflows for manual triggering without needing a
+- `workflow_dispatch:` is enabled on all 4 workflows for manual triggering without needing a
   PR or push.
 - This is deliberately **DEV-only** today — see [Known Limitations](#known-limitations-demo-scope).
 
@@ -523,6 +581,7 @@ gh run list --repo radhasgrl/snowflake-platform-tf --limit 5
 
 # Manually trigger a plan run (no PR needed)
 gh workflow run terraform-plan.yml --repo radhasgrl/snowflake-platform-tf
+gh workflow run dcm-plan.yml --repo radhasgrl/snowflake-platform-tf
 gh run list --repo radhasgrl/snowflake-platform-tf --limit 3
 ```
 
@@ -535,9 +594,10 @@ authenticator requires a genuine GitHub Actions-issued OIDC token (fetched via
 This blocks *every* command against that module, not just ones touching Snowflake
 resources, since Terraform configures all declared providers before running any operation.
 To verify the root module, use `workflow_dispatch` to run
-`terraform-plan.yml`/`terraform-apply.yml` for real, or read the PR comment a real CI run
-posts. The two `terraform/bootstrap/` stacks are the exception — they only use the AWS
-provider, so `terraform plan` against them works locally with valid AWS credentials.
+`terraform-plan.yml`/`terraform-apply.yml`/`dcm-plan.yml`/`dcm-deploy.yml` for real, or
+read the PR comment a real CI run posts. The two `terraform/bootstrap/` stacks are the
+exception — they only use the AWS provider, so `terraform plan` against them works locally
+with valid AWS credentials.
 
 ---
 

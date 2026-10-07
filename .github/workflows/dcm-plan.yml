@@ -1,0 +1,225 @@
+name: DCM Plan
+
+# DCM-only — Terraform has its own terraform-plan.yml. Split out from a combined file so
+# CI load, PR-check naming, and CODEOWNERS routing (/dcm/ -> data engineering) all stay
+# scoped to DCM, instead of a DCM-only PR also running an unrelated Terraform plan.
+#
+# DCM authenticates as GITHUB_DEV_DCM_SVC, an identity Terraform itself creates
+# (terraform/oidc_service_user.tf) — see "Verify DCM identity is ready" in each job below
+# for how that ordering dependency is handled now that the two tools' pipelines are no
+# longer in the same file.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "dcm/**"
+      - ".github/workflows/dcm-plan.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+  # Account-level DCM project — genuinely platform-wide (one warehouse for CI/platform
+  # tooling), never repeated per domain. Always runs on every plan, unlike the per-domain
+  # matrix below, since there's exactly one of this project and it rarely changes.
+  account-plan:
+    name: DCM Plan (account)
+    runs-on: ubuntu-latest
+    environment:
+      name: DEV-DCM
+
+    env:
+      SNOWFLAKE_ACCOUNT: xygpmhm-gq04150
+      SNOWFLAKE_USER: GITHUB_DEV_DCM_SVC
+      SNOWFLAKE_WORKLOAD_IDENTITY_PROVIDER: OIDC
+
+    defaults:
+      run:
+        working-directory: dcm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Snowflake CLI (OIDC)
+        uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
+
+      - name: Create default Snowflake CLI connection (OIDC)
+        run: |
+          snow connection add \
+            --connection-name github \
+            --account "$SNOWFLAKE_ACCOUNT" \
+            --user "$SNOWFLAKE_USER" \
+            --role SYSADMIN \
+            --authenticator WORKLOAD_IDENTITY \
+            --workload-identity-provider OIDC \
+            --default \
+            --no-interactive
+
+      # DCM and Terraform no longer share a workflow file, so there's no same-file `needs:`
+      # to guarantee Terraform created this identity first. This step fails fast with a
+      # clear, actionable message instead of a cryptic OIDC auth error — if
+      # GITHUB_DEV_DCM_SVC doesn't exist yet, authenticating as it is inherently
+      # impossible (Snowflake can't validate a workload-identity token against a user that
+      # isn't there), so this check is really just making that unavoidable failure legible.
+      - name: Verify DCM identity is ready
+        run: |
+          if ! snow sql -q "SELECT CURRENT_USER();" >/tmp/dcm_identity_check.log 2>&1; then
+            echo "::error::Could not authenticate as $SNOWFLAKE_USER. This almost always means Terraform hasn't created this identity yet (see terraform/oidc_service_user.tf) -- run the 'Terraform Apply' workflow first, then re-run this one."
+            cat /tmp/dcm_identity_check.log
+            exit 1
+          fi
+
+      # `snow dcm plan`/`deploy` require the DCM Project object itself to already exist —
+      # --if-not-exists makes this safe to run on every plan, including the very first one.
+      - name: Create DCM project (idempotent)
+        run: snow dcm create --target ACCOUNT --from account --if-not-exists
+
+      - name: DCM Plan
+        id: dcm_plan
+        run: snow dcm plan --target ACCOUNT --from account 2>&1 | tee dcm_plan_account_output.txt
+        continue-on-error: true
+
+      - name: Post DCM plan as PR comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('dcm/dcm_plan_account_output.txt', 'utf8');
+            const truncated = plan.length > 60000 ? plan.slice(0, 60000) + '\n\n...output truncated' : plan;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## DCM Plan (DEV, account)\n\`\`\`\n${truncated}\n\`\`\``
+            });
+
+      - name: Fail if DCM plan failed
+        if: steps.dcm_plan.outcome == 'failure'
+        run: exit 1
+
+  detect-domains:
+    name: Detect Changed Domains
+    runs-on: ubuntu-latest
+    outputs:
+      domains: ${{ steps.detect.outputs.domains }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Only domains listed in dcm/active_domains.json ever get a job here — a domain
+      # whose manifest.yml exists but isn't "active" (e.g. a deliberately-not-yet-deployed
+      # template like Procurement) never runs, no matter what changed. This is what keeps
+      # CI load flat as domains scale into the hundreds: a PR touching one domain's folder
+      # doesn't replan every other domain too.
+      - name: Detect which domains changed
+        id: detect
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            DOMAINS=$(bash dcm/detect-changed-domains.sh ALL)
+          else
+            DOMAINS=$(bash dcm/detect-changed-domains.sh "${{ github.event.pull_request.base.sha || github.event.before }}" "${{ github.sha }}")
+          fi
+          echo "Domains to plan: $DOMAINS"
+          echo "domains=$DOMAINS" >> "$GITHUB_OUTPUT"
+
+  dcm-plan:
+    name: DCM Plan (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    needs: detect-domains
+    if: needs.detect-domains.outputs.domains != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.detect-domains.outputs.domains) }}
+    environment:
+      name: DEV-DCM
+
+    env:
+      SNOWFLAKE_ACCOUNT: xygpmhm-gq04150
+      SNOWFLAKE_USER: GITHUB_DEV_DCM_SVC
+      SNOWFLAKE_WORKLOAD_IDENTITY_PROVIDER: OIDC
+
+    defaults:
+      run:
+        working-directory: dcm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Snowflake CLI (OIDC)
+        uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
+
+      - name: Create default Snowflake CLI connection (OIDC)
+        run: |
+          snow connection add \
+            --connection-name github \
+            --account "$SNOWFLAKE_ACCOUNT" \
+            --user "$SNOWFLAKE_USER" \
+            --role SYSADMIN \
+            --authenticator WORKLOAD_IDENTITY \
+            --workload-identity-provider OIDC \
+            --default \
+            --no-interactive
+
+      # See account-plan's identical step above for why this exists now that DCM and
+      # Terraform no longer share a workflow file.
+      - name: Verify DCM identity is ready
+        run: |
+          if ! snow sql -q "SELECT CURRENT_USER();" >/tmp/dcm_identity_check.log 2>&1; then
+            echo "::error::Could not authenticate as $SNOWFLAKE_USER. This almost always means Terraform hasn't created this identity yet (see terraform/oidc_service_user.tf) -- run the 'Terraform Apply' workflow first, then re-run this one."
+            cat /tmp/dcm_identity_check.log
+            exit 1
+          fi
+
+      # Synthesizes dcm/domains/<domain>/sources/ from dcm/_template/ (see
+      # dcm/sync-domain.sh) — this is what keeps domain onboarding at zero duplicated SQL.
+      # Never committed; regenerated fresh on every run.
+      - name: Synthesize ${{ matrix.name }} domain sources
+        run: bash sync-domain.sh ${{ matrix.name }}
+
+      # `snow dcm plan`/`deploy` require the DCM Project object itself to already exist —
+      # --if-not-exists makes this safe to run on every plan, including the very first one.
+      - name: Create DCM project (idempotent)
+        run: snow dcm create --target ${{ matrix.target }} --from domains/${{ matrix.name }} --if-not-exists
+
+      - name: DCM Plan
+        id: dcm_plan
+        run: snow dcm plan --target ${{ matrix.target }} --from domains/${{ matrix.name }} 2>&1 | tee dcm_plan_output.txt
+        continue-on-error: true
+
+      - name: Post DCM plan as PR comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('dcm/dcm_plan_output.txt', 'utf8');
+            const truncated = plan.length > 60000 ? plan.slice(0, 60000) + '\n\n...output truncated' : plan;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## DCM Plan (DEV, ${{ matrix.name }})\n\`\`\`\n${truncated}\n\`\`\``
+            });
+
+      - name: Fail if DCM plan failed
+        if: steps.dcm_plan.outcome == 'failure'
+        run: exit 1
