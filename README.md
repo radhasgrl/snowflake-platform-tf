@@ -208,6 +208,7 @@ silently drifting.
 | `DEV_CUSTOMER_DB.RAW.CUSTOMERS` table (`dcm/_template/sources/definitions/tables.sql`) | Repo 2 loads into it; Repo 3 reads it as a dbt source |
 | `DEV_CUSTOMER_DB.STAGING` / `.MARTS` schemas, `DEV_CUSTOMER_TRANSFORM_WH` warehouse | Repo 3 builds its dbt models into these |
 | S3 bucket `data-ingestion-raw-525218385225` + 2 IAM roles (`terraform/ingestion_aws_infra.tf`) | Repo 2's CI assumes one role to manage the bucket; Snowflake's storage integration assumes the other to read it |
+| `.github/workflows/dbt-build-reusable.yml` (`workflow_call`) | Every per-domain dbt repo (Repo 3 and its future siblings) calls this instead of defining its own dbt build logic — see "Centrally-maintained CI for Repo 3" below |
 
 **What Repo 2/3 developers can do independently** (no Repo 1 PR needed): add a new
 pipe/stage reading from the same bucket into the same existing table (Repo 2); add a new
@@ -217,6 +218,37 @@ dbt model reading existing sources into the existing `STAGING`/`MARTS` schemas (
 new AWS bucket or broader privileges, a new domain database, or standing up a brand-new
 downstream repo for a new domain team — anything that doesn't exist yet in Repo 1's
 Terraform/DCM definitions.
+
+### Centrally-maintained CI for Repo 3
+
+Repo 3 is **one GitHub repo per domain** — `customer-domain-dbt` today, a future
+`procurement-domain-dbt` or similar later. Rather than each domain repo hand-maintaining
+its own full copy of the dbt build pipeline (checkout, install dbt-snowflake, fetch an
+OIDC token, configure `profiles.yml`, run `dbt build`, post a PR comment, clean up ephemeral
+PR schemas), every domain repo's `.github/workflows/dbt-ci.yml` is a **thin wrapper** that
+calls `.github/workflows/dbt-build-reusable.yml` in *this* repo:
+
+```yaml
+jobs:
+  dbt:
+    uses: radhasgrl/snowflake-platform-tf/.github/workflows/dbt-build-reusable.yml@main
+    with:
+      domain: customer
+      dbt_project_name: customer_domain
+      account: xygpmhm-gq04150
+      user: GITHUB_DEV_DBT_SVC
+      role: DEV_CUSTOMER_DBT_SERVICE_PRSN
+      warehouse: DEV_CUSTOMER_TRANSFORM_WH
+      database: DEV_CUSTOMER_DB
+      schema: STAGING
+      github_environment: DEV-dbt
+```
+
+Fixing a bug or adding a step to the dbt build process means editing
+`dbt-build-reusable.yml` **once, here** — every domain repo referencing `@main` picks up
+the change on its next run, with no PR needed in each individual domain repo. A domain
+repo's own `dbt-ci.yml` only ever needs to change its own `with:` values (e.g. a new
+domain's database/warehouse/role names), never the build logic itself.
 
 ---
 
