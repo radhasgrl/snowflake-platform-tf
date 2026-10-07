@@ -1,0 +1,45 @@
+name: release-please
+
+# Maintains ONE standing "Release PR" that accumulates every Conventional-Commits-formatted
+# PR title merged to main (see pr-title-lint.yml -- that check is what guarantees this
+# workflow always has well-formed input to parse) since the last release, recalculating the
+# proposed version and regenerating CHANGELOG.md on every push. Deliberately does NOT tag
+# or release anything by itself -- merging that Release PR is the actual "cut a release"
+# decision (see release-please-config.json's "simple" release-type + pinned
+# initial-version: 1.0.0). That merge is what release-please recognizes as a release commit
+# and is what creates the real git tag + GitHub Release, which `promote.yml` later consumes.
+#
+# Runs independently of, and does not block, terraform-apply.yml/dcm-deploy.yml -- DEV still
+# deploys continuously on every merge to main, unchanged. Versioning and DEV deployment are
+# two separate concerns: this workflow governs "what counts as a release," not "what's
+# running in DEV right now."
+#
+# KNOWN LIMITATION (documented, not a bug): this uses the default GITHUB_TOKEN, which means
+# the Release PRs this action opens will NOT trigger pull_request-triggered workflows
+# (Terraform Plan / DCM Plan (gate) / PR Title Lint) on themselves -- GitHub's anti-recursion
+# safeguard prevents GITHUB_TOKEN-authored events from starting new workflow runs. In this
+# solo-account demo that's a non-issue (every merge already uses an admin override, same as
+# every other PR this session), but a real multi-person team relying on required status
+# checks to gate ALL merges, including Release PRs, would need a dedicated PAT or GitHub App
+# token instead -- see release-please-action's own README, "Other Actions on Release Please
+# PRs".
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  release-please:
+    name: release-please
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
