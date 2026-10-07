@@ -1,0 +1,30 @@
+name: PR Title Lint
+
+# Enforces Conventional Commits on the PR TITLE specifically (not individual commits on the
+# branch) -- this repo squash-merges (required_linear_history, see branch protection), so
+# every feature branch collapses into ONE commit on main, and GitHub defaults that squashed
+# commit's message to the PR title. That title is therefore the only thing that actually
+# drives release-please's version computation (release-please.yml) -- a badly-formed title
+# here means a badly-formed entry in the changelog and a potentially wrong version bump, so
+# this is a hard gate, not just a style nit.
+#
+# Format required: type(optional-scope): description -- e.g. "feat(customer): add raw
+# orders table", "fix(terraform): correct OIDC subject claim", "chore: update README".
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  lint-pr-title:
+    name: PR Title Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR title follows Conventional Commits
+        uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
