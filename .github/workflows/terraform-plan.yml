@@ -1,9 +1,15 @@
 name: Terraform Plan
 
-# Terraform-only — DCM has its own dcm-plan.yml (separate file, separate trigger paths,
-# separate CODEOWNERS routing). The two used to live in one file; split out so CI load,
-# PR-check naming, and review ownership all stay scoped to the actual tool that changed,
-# instead of a DCM-only PR also running an unrelated Terraform plan (or vice versa).
+# Terraform runs FIRST, DCM runs SECOND, always, one after another -- per client
+# direction, DCM's identity (GITHUB_DEV_DCM_SVC) is created by Terraform, so DCM must never
+# plan/deploy without a guaranteed-successful Terraform run immediately before it. Workflow
+# files stay separate (CI load, PR-check naming, and CODEOWNERS routing still scoped
+# per-tool), but execution is sequenced: dcm-plan.yml triggers via `workflow_run` on THIS
+# workflow's completion (see that file's header comment for the full mechanism, including
+# why it needs the Checks API to still satisfy branch protection).
+#
+# This is why the path filter below includes dcm/** as well as terraform/** -- a DCM-only
+# PR must also run Terraform Plan first, so dcm-plan.yml has something to chain from.
 #
 # Deliberately DEV-only for this demo. There is no "choose an environment" dropdown here
 # because selecting anything other than DEV would not actually work today: only the
@@ -20,6 +26,7 @@ on:
     branches: [main]
     paths:
       - "terraform/**"
+      - "dcm/**"
       - ".github/workflows/terraform-plan.yml"
   workflow_dispatch:
 
