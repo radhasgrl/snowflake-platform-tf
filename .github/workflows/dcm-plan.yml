@@ -205,10 +205,13 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            let plan = 'No active domains needed planning this run.';
+            let plan = '';
             try {
               plan = fs.readFileSync('dcm/all_domains_plan_output.txt', 'utf8');
             } catch (e) {}
+            if (plan.trim() === '') {
+              plan = 'No active domains needed planning this run.';
+            }
             const truncated = plan.length > 60000 ? plan.slice(0, 60000) + '\n\n...output truncated' : plan;
 
             await github.rest.issues.createComment({
