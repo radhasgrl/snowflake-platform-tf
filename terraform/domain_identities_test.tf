@@ -8,6 +8,7 @@
 # instantiations are completely independent, each driven by its own YAML file.
 module "domain_onboarding_test" {
   source = "./modules/domain_onboarding"
+  count  = local.env == "TEST" ? 1 : 0
 
   providers = {
     snowflake.useradmin = snowflake.useradmin
@@ -15,4 +16,15 @@ module "domain_onboarding_test" {
 
   domains                       = yamldecode(file("${path.module}/domains_test.yaml"))
   github_account_subject_prefix = "radhasgrl@43290275"
+}
+
+# Address rename caused by adding `count` above -- see domain_identities.tf's identical
+# comment for why each for_each key needs its own moved block.
+moved {
+  from = module.domain_onboarding_test.snowflake_execute.domain_dbt_service_user["customer"]
+  to   = module.domain_onboarding_test[0].snowflake_execute.domain_dbt_service_user["customer"]
+}
+moved {
+  from = module.domain_onboarding_test.snowflake_execute.domain_ingest_service_user["customer"]
+  to   = module.domain_onboarding_test[0].snowflake_execute.domain_ingest_service_user["customer"]
 }
