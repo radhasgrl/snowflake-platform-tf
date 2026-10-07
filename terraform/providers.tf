@@ -1,31 +1,3 @@
-# ---------------------------------------------------------------------------------------
-# TEMPORARY — default (unaliased) and securityadmin providers, kept only so `removed.tf`
-# can resolve the provider configuration for resources still present in Terraform state
-# from before the DCM migration (databases.tf/schemas.tf/warehouses.tf resources used the
-# bare default provider; masking.tf/row_access.tf used `snowflake.securityadmin`). Terraform
-# requires the original provider config to still exist to clean up an orphaned resource —
-# see the "Provider configuration not present" error this fixed. DELETE both of these blocks
-# in a follow-up PR once a `terraform plan` after this one merges shows no more orphans.
-# ---------------------------------------------------------------------------------------
-provider "snowflake" {
-  organization_name          = var.snowflake_organization_name
-  account_name               = var.snowflake_account_name
-  user                       = var.snowflake_oidc_user
-  role                       = "SYSADMIN"
-  authenticator              = "WORKLOAD_IDENTITY"
-  workload_identity_provider = "OIDC"
-}
-
-provider "snowflake" {
-  alias                      = "securityadmin"
-  organization_name          = var.snowflake_organization_name
-  account_name               = var.snowflake_account_name
-  user                       = var.snowflake_oidc_user
-  role                       = "SECURITYADMIN"
-  authenticator              = "WORKLOAD_IDENTITY"
-  workload_identity_provider = "OIDC"
-}
-
 # USERADMIN provider — the only role this repo's Terraform resources still need going
 # forward, now that databases/schemas/warehouses/roles/grants/masking/row-access policies
 # have moved to DCM (../dcm/_template/sources/definitions/). Terraform's remaining scope is

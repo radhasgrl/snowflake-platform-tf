@@ -129,7 +129,6 @@ Nothing Terraform-related lives outside `terraform/`; nothing DCM-related lives 
 │   │       └── variables.tf          #   var.domains (populated from domains.yaml)
 │   ├── dcm_home.tf                   # DEV_ADMIN_DB.DCM, the DCM project's own home
 │   ├── ingestion_aws_infra.tf        # Repo 2's S3 bucket + IAM roles (provisioned here, not in Repo 2)
-│   ├── removed.tf                    # one-time `removed` blocks for the DCM cutover
 │   ├── context.tf, providers.tf, terraform.tf, variables.tf, outputs.tf
 │   │                                 # Root module #3: the ONGOING, CI-managed Terraform —
 │   │                                 #   deployed by terraform-apply.yml on every merge
@@ -437,10 +436,11 @@ manifests iterated far more often).
 ## History — Terraform → DCM Cutover, then Domain Templating
 
 Databases, schemas, warehouses, functional roles, and DB grants were originally defined as
-Terraform resources. They were migrated to DCM, using `removed` blocks (`terraform/removed.tf`)
-so Terraform forgot them without destroying the live Snowflake objects — DCM adopted the
-exact same objects with no disruption. Names were also changed from generic to
-Customer-domain-scoped at the same time:
+Terraform resources. They were migrated to DCM, using `removed` blocks (previously
+`terraform/removed.tf`, deleted once the cutover was confirmed safe — see commit history
+for the original file) so Terraform forgot them without destroying the live Snowflake
+objects — DCM adopted the exact same objects with no disruption. Names were also changed
+from generic to Customer-domain-scoped at the same time:
 
 | Old (Terraform, generic) | Current (DCM, Customer-domain) |
 |---|---|
