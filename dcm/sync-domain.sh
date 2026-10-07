@@ -25,4 +25,4 @@ mkdir -p "${DOMAIN_DIR}/sources/definitions" "${DOMAIN_DIR}/sources/macros"
 cp -r "${SCRIPT_DIR}/sources/definitions/." "${DOMAIN_DIR}/sources/definitions/"
 cp -r "${SCRIPT_DIR}/sources/macros/." "${DOMAIN_DIR}/sources/macros/"
 
-echo "Synthesized ${DOMAIN_DIR}/sources/ from dcm/sources/ (not committed - gitignored)."
+echo "Synthesized ${DOMAIN_DIR}/sources/ from dcm/sources/ (not committed - gitignored)."# verification-only comment: confirming DCM Plan (gate) satisfies branch protection (throwaway, not merging)
