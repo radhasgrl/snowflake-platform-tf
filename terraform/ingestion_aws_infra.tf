@@ -9,9 +9,18 @@
 # destroy+recreate) — same bucket, same IAM roles, same ARNs, zero resource disruption.
 # See data-ingestion-raw's git history (aws/main.tf, now deleted) for the original.
 
+# DEV-only, unconditionally -- there is one AWS account and one S3 bucket for this whole
+# demo platform, shared by every environment tier (Snowflake-side TEST isolation is by
+# naming convention; the underlying ingestion bucket/IAM roles are genuinely not
+# per-environment resources). Applied once by the continuous DEV pipeline only; never
+# promoted by tag, same treatment as the reference infra-platform repo's shared sandbox
+# state bucket. Gating this out for TEST means promote.yml's Terraform step never needs
+# AWS credentials at all (only Snowflake OIDC) -- its plan has zero AWS resources in it.
+
 # GitHub's OIDC provider is one-per-AWS-account — already created by bootstrap/oidc-identity/ (relative to this terraform/ folder).
 data "aws_iam_openid_connect_provider" "github_actions" {
-  url = "https://token.actions.githubusercontent.com"
+  count = local.env == "DEV" ? 1 : 0
+  url   = "https://token.actions.githubusercontent.com"
 }
 
 # Role data-ingestion-raw's own GitHub Actions workflows assume via
@@ -19,14 +28,15 @@ data "aws_iam_openid_connect_provider" "github_actions" {
 # role, snowflake-platform-tf-github-oidc, is scoped only to snowflake-platform-tf and
 # can't be reused by a different repo's workflows).
 resource "aws_iam_role" "github_actions_ingestion" {
-  name = "data-ingestion-raw-github-oidc"
+  count = local.env == "DEV" ? 1 : 0
+  name  = "data-ingestion-raw-github-oidc"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
         Effect    = "Allow"
-        Principal = { Federated = data.aws_iam_openid_connect_provider.github_actions.arn }
+        Principal = { Federated = one(data.aws_iam_openid_connect_provider.github_actions[*].arn) }
         Action    = "sts:AssumeRoleWithWebIdentity"
         Condition = {
           StringEquals = {
@@ -44,19 +54,22 @@ resource "aws_iam_role" "github_actions_ingestion" {
 # Source bucket for the ingestion demo — CSV files land here and Snowpipe loads them into
 # DEV_CUSTOMER_DB.RAW.CUSTOMERS.
 resource "aws_s3_bucket" "ingestion_raw" {
+  count  = local.env == "DEV" ? 1 : 0
   bucket = "data-ingestion-raw-525218385225"
 }
 
 resource "aws_s3_bucket_versioning" "ingestion_raw" {
-  bucket = aws_s3_bucket.ingestion_raw.id
+  count  = local.env == "DEV" ? 1 : 0
+  bucket = one(aws_s3_bucket.ingestion_raw[*].id)
   versioning_configuration {
     status = "Enabled"
   }
 }
 
 resource "aws_iam_role_policy" "ingestion_bucket_access" {
-  name = "ingestion-raw-s3-access"
-  role = aws_iam_role.github_actions_ingestion.id
+  count = local.env == "DEV" ? 1 : 0
+  name  = "ingestion-raw-s3-access"
+  role  = one(aws_iam_role.github_actions_ingestion[*].id)
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -64,12 +77,12 @@ resource "aws_iam_role_policy" "ingestion_bucket_access" {
       {
         Effect   = "Allow"
         Action   = ["s3:ListBucket", "s3:GetBucketLocation"]
-        Resource = aws_s3_bucket.ingestion_raw.arn
+        Resource = one(aws_s3_bucket.ingestion_raw[*].arn)
       },
       {
         Effect   = "Allow"
         Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
-        Resource = "${aws_s3_bucket.ingestion_raw.arn}/*"
+        Resource = "${one(aws_s3_bucket.ingestion_raw[*].arn)}/*"
       }
     ]
   })
@@ -88,7 +101,8 @@ resource "aws_iam_role_policy" "ingestion_bucket_access" {
 # `DESC INTEGRATION CUSTOMER_TEST_RAW_S3_INTEGRATION` during Repo 2's Phase B TEST
 # promotion work -- its external ID genuinely differs from the original DEV integration's.
 resource "aws_iam_role" "snowflake_storage_integration" {
-  name = "data-ingestion-raw-snowflake-storage-integration"
+  count = local.env == "DEV" ? 1 : 0
+  name  = "data-ingestion-raw-snowflake-storage-integration"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -113,8 +127,9 @@ resource "aws_iam_role" "snowflake_storage_integration" {
 }
 
 resource "aws_iam_role_policy" "snowflake_storage_integration_access" {
-  name = "snowflake-storage-integration-s3-access"
-  role = aws_iam_role.snowflake_storage_integration.id
+  count = local.env == "DEV" ? 1 : 0
+  name  = "snowflake-storage-integration-s3-access"
+  role  = one(aws_iam_role.snowflake_storage_integration[*].id)
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -122,13 +137,44 @@ resource "aws_iam_role_policy" "snowflake_storage_integration_access" {
       {
         Effect   = "Allow"
         Action   = ["s3:GetObject", "s3:GetObjectVersion"]
-        Resource = "${aws_s3_bucket.ingestion_raw.arn}/*"
+        Resource = "${one(aws_s3_bucket.ingestion_raw[*].arn)}/*"
       },
       {
         Effect   = "Allow"
         Action   = ["s3:ListBucket", "s3:GetBucketLocation"]
-        Resource = aws_s3_bucket.ingestion_raw.arn
+        Resource = one(aws_s3_bucket.ingestion_raw[*].arn)
       }
     ]
   })
+}
+
+# Address renames caused by adding `count` above -- see oidc_service_user.tf's identical
+# comment for why these are safe, state-rename-only operations.
+moved {
+  from = data.aws_iam_openid_connect_provider.github_actions
+  to   = data.aws_iam_openid_connect_provider.github_actions[0]
+}
+moved {
+  from = aws_iam_role.github_actions_ingestion
+  to   = aws_iam_role.github_actions_ingestion[0]
+}
+moved {
+  from = aws_s3_bucket.ingestion_raw
+  to   = aws_s3_bucket.ingestion_raw[0]
+}
+moved {
+  from = aws_s3_bucket_versioning.ingestion_raw
+  to   = aws_s3_bucket_versioning.ingestion_raw[0]
+}
+moved {
+  from = aws_iam_role_policy.ingestion_bucket_access
+  to   = aws_iam_role_policy.ingestion_bucket_access[0]
+}
+moved {
+  from = aws_iam_role.snowflake_storage_integration
+  to   = aws_iam_role.snowflake_storage_integration[0]
+}
+moved {
+  from = aws_iam_role_policy.snowflake_storage_integration_access
+  to   = aws_iam_role_policy.snowflake_storage_integration_access[0]
 }

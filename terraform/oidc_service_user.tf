@@ -17,6 +17,7 @@
 # identity is no longer needed.
 
 resource "snowflake_execute" "github_dev_terraform_service_user" {
+  count    = local.env == "DEV" ? 1 : 0
   provider = snowflake.useradmin
 
   execute = <<-SQL
@@ -34,6 +35,7 @@ resource "snowflake_execute" "github_dev_terraform_service_user" {
 }
 
 resource "snowflake_grant_account_role" "github_dev_terraform_sysadmin" {
+  count     = local.env == "DEV" ? 1 : 0
   provider  = snowflake.useradmin
   role_name = "SYSADMIN"
   user_name = "GITHUB_DEV_TERRAFORM_SVC"
@@ -42,6 +44,7 @@ resource "snowflake_grant_account_role" "github_dev_terraform_sysadmin" {
 }
 
 resource "snowflake_grant_account_role" "github_dev_terraform_useradmin" {
+  count     = local.env == "DEV" ? 1 : 0
   provider  = snowflake.useradmin
   role_name = "USERADMIN"
   user_name = "GITHUB_DEV_TERRAFORM_SVC"
@@ -50,6 +53,7 @@ resource "snowflake_grant_account_role" "github_dev_terraform_useradmin" {
 }
 
 resource "snowflake_grant_account_role" "github_dev_terraform_securityadmin" {
+  count     = local.env == "DEV" ? 1 : 0
   provider  = snowflake.useradmin
   role_name = "SECURITYADMIN"
   user_name = "GITHUB_DEV_TERRAFORM_SVC"
@@ -58,6 +62,7 @@ resource "snowflake_grant_account_role" "github_dev_terraform_securityadmin" {
 }
 
 resource "snowflake_execute" "github_dev_dcm_service_user" {
+  count    = local.env == "DEV" ? 1 : 0
   provider = snowflake.useradmin
 
   execute = <<-SQL
@@ -83,6 +88,7 @@ resource "snowflake_execute" "github_dev_dcm_service_user" {
 # databases/schemas/warehouses (SYSADMIN), roles (USERADMIN), and masking/row-access
 # policies (SECURITYADMIN). Secondary roles make all three active at once.
 resource "snowflake_execute" "github_dev_dcm_service_user_defaults" {
+  count    = local.env == "DEV" ? 1 : 0
   provider = snowflake.useradmin
 
   execute = "ALTER USER GITHUB_DEV_DCM_SVC SET DEFAULT_ROLE = SYSADMIN, DEFAULT_SECONDARY_ROLES = ('ALL')"
@@ -92,6 +98,7 @@ resource "snowflake_execute" "github_dev_dcm_service_user_defaults" {
 }
 
 resource "snowflake_grant_account_role" "github_dev_dcm_sysadmin" {
+  count     = local.env == "DEV" ? 1 : 0
   provider  = snowflake.useradmin
   role_name = "SYSADMIN"
   user_name = "GITHUB_DEV_DCM_SVC"
@@ -100,6 +107,7 @@ resource "snowflake_grant_account_role" "github_dev_dcm_sysadmin" {
 }
 
 resource "snowflake_grant_account_role" "github_dev_dcm_useradmin" {
+  count     = local.env == "DEV" ? 1 : 0
   provider  = snowflake.useradmin
   role_name = "USERADMIN"
   user_name = "GITHUB_DEV_DCM_SVC"
@@ -108,6 +116,7 @@ resource "snowflake_grant_account_role" "github_dev_dcm_useradmin" {
 }
 
 resource "snowflake_grant_account_role" "github_dev_dcm_securityadmin" {
+  count     = local.env == "DEV" ? 1 : 0
   provider  = snowflake.useradmin
   role_name = "SECURITYADMIN"
   user_name = "GITHUB_DEV_DCM_SVC"
@@ -122,7 +131,15 @@ resource "snowflake_grant_account_role" "github_dev_dcm_securityadmin" {
 # never be able to authenticate as, or be confused with, a DEV deploy. TEST-Terraform and
 # TEST-DCM GitHub Environments (with a required-reviewer protection rule) are what actually
 # gate when these identities' tokens can be minted at all -- see promote.yml.
+#
+# count, not a separate module/workspace: this keeps one DRY codebase promoted by git tag
+# across environments (HashiCorp's own recommended multi-environment pattern), with each
+# tier's state file (env/<tier>/backend.hcl) only ever containing the resources gated on
+# for that tier -- confirmed via the one-off state migration that moved these specific
+# resources into workload/test/terraform.tfstate (see git history for
+# _tmp-state-migration.yml, now deleted).
 resource "snowflake_execute" "github_test_terraform_service_user" {
+  count    = local.env == "TEST" ? 1 : 0
   provider = snowflake.useradmin
 
   execute = <<-SQL
@@ -140,6 +157,7 @@ resource "snowflake_execute" "github_test_terraform_service_user" {
 }
 
 resource "snowflake_grant_account_role" "github_test_terraform_sysadmin" {
+  count     = local.env == "TEST" ? 1 : 0
   provider  = snowflake.useradmin
   role_name = "SYSADMIN"
   user_name = "GITHUB_TEST_TERRAFORM_SVC"
@@ -148,6 +166,7 @@ resource "snowflake_grant_account_role" "github_test_terraform_sysadmin" {
 }
 
 resource "snowflake_grant_account_role" "github_test_terraform_useradmin" {
+  count     = local.env == "TEST" ? 1 : 0
   provider  = snowflake.useradmin
   role_name = "USERADMIN"
   user_name = "GITHUB_TEST_TERRAFORM_SVC"
@@ -156,6 +175,7 @@ resource "snowflake_grant_account_role" "github_test_terraform_useradmin" {
 }
 
 resource "snowflake_grant_account_role" "github_test_terraform_securityadmin" {
+  count     = local.env == "TEST" ? 1 : 0
   provider  = snowflake.useradmin
   role_name = "SECURITYADMIN"
   user_name = "GITHUB_TEST_TERRAFORM_SVC"
@@ -164,6 +184,7 @@ resource "snowflake_grant_account_role" "github_test_terraform_securityadmin" {
 }
 
 resource "snowflake_execute" "github_test_dcm_service_user" {
+  count    = local.env == "TEST" ? 1 : 0
   provider = snowflake.useradmin
 
   execute = <<-SQL
@@ -183,6 +204,7 @@ resource "snowflake_execute" "github_test_dcm_service_user" {
 # See github_dev_dcm_service_user_defaults' identical comment above for why this is a
 # separate resource and why secondary roles matter here.
 resource "snowflake_execute" "github_test_dcm_service_user_defaults" {
+  count    = local.env == "TEST" ? 1 : 0
   provider = snowflake.useradmin
 
   execute = "ALTER USER GITHUB_TEST_DCM_SVC SET DEFAULT_ROLE = SYSADMIN, DEFAULT_SECONDARY_ROLES = ('ALL')"
@@ -192,6 +214,7 @@ resource "snowflake_execute" "github_test_dcm_service_user_defaults" {
 }
 
 resource "snowflake_grant_account_role" "github_test_dcm_sysadmin" {
+  count     = local.env == "TEST" ? 1 : 0
   provider  = snowflake.useradmin
   role_name = "SYSADMIN"
   user_name = "GITHUB_TEST_DCM_SVC"
@@ -200,6 +223,7 @@ resource "snowflake_grant_account_role" "github_test_dcm_sysadmin" {
 }
 
 resource "snowflake_grant_account_role" "github_test_dcm_useradmin" {
+  count     = local.env == "TEST" ? 1 : 0
   provider  = snowflake.useradmin
   role_name = "USERADMIN"
   user_name = "GITHUB_TEST_DCM_SVC"
@@ -208,6 +232,7 @@ resource "snowflake_grant_account_role" "github_test_dcm_useradmin" {
 }
 
 resource "snowflake_grant_account_role" "github_test_dcm_securityadmin" {
+  count     = local.env == "TEST" ? 1 : 0
   provider  = snowflake.useradmin
   role_name = "SECURITYADMIN"
   user_name = "GITHUB_TEST_DCM_SVC"
@@ -219,3 +244,78 @@ resource "snowflake_grant_account_role" "github_test_dcm_securityadmin" {
 # domain_identities.tf — a for_each-driven pattern so onboarding domain #2+ is one new map
 # entry, not a hand-written copy of these two resources. See that file and README.md's
 # "Onboarding a New Domain" section.
+
+# Address renames caused by adding `count` above -- state-rename only, zero destroy/
+# recreate, verified via "No changes" on the next plan for every resource below.
+moved {
+  from = snowflake_execute.github_dev_terraform_service_user
+  to   = snowflake_execute.github_dev_terraform_service_user[0]
+}
+moved {
+  from = snowflake_grant_account_role.github_dev_terraform_sysadmin
+  to   = snowflake_grant_account_role.github_dev_terraform_sysadmin[0]
+}
+moved {
+  from = snowflake_grant_account_role.github_dev_terraform_useradmin
+  to   = snowflake_grant_account_role.github_dev_terraform_useradmin[0]
+}
+moved {
+  from = snowflake_grant_account_role.github_dev_terraform_securityadmin
+  to   = snowflake_grant_account_role.github_dev_terraform_securityadmin[0]
+}
+moved {
+  from = snowflake_execute.github_dev_dcm_service_user
+  to   = snowflake_execute.github_dev_dcm_service_user[0]
+}
+moved {
+  from = snowflake_execute.github_dev_dcm_service_user_defaults
+  to   = snowflake_execute.github_dev_dcm_service_user_defaults[0]
+}
+moved {
+  from = snowflake_grant_account_role.github_dev_dcm_sysadmin
+  to   = snowflake_grant_account_role.github_dev_dcm_sysadmin[0]
+}
+moved {
+  from = snowflake_grant_account_role.github_dev_dcm_useradmin
+  to   = snowflake_grant_account_role.github_dev_dcm_useradmin[0]
+}
+moved {
+  from = snowflake_grant_account_role.github_dev_dcm_securityadmin
+  to   = snowflake_grant_account_role.github_dev_dcm_securityadmin[0]
+}
+moved {
+  from = snowflake_execute.github_test_terraform_service_user
+  to   = snowflake_execute.github_test_terraform_service_user[0]
+}
+moved {
+  from = snowflake_grant_account_role.github_test_terraform_sysadmin
+  to   = snowflake_grant_account_role.github_test_terraform_sysadmin[0]
+}
+moved {
+  from = snowflake_grant_account_role.github_test_terraform_useradmin
+  to   = snowflake_grant_account_role.github_test_terraform_useradmin[0]
+}
+moved {
+  from = snowflake_grant_account_role.github_test_terraform_securityadmin
+  to   = snowflake_grant_account_role.github_test_terraform_securityadmin[0]
+}
+moved {
+  from = snowflake_execute.github_test_dcm_service_user
+  to   = snowflake_execute.github_test_dcm_service_user[0]
+}
+moved {
+  from = snowflake_execute.github_test_dcm_service_user_defaults
+  to   = snowflake_execute.github_test_dcm_service_user_defaults[0]
+}
+moved {
+  from = snowflake_grant_account_role.github_test_dcm_sysadmin
+  to   = snowflake_grant_account_role.github_test_dcm_sysadmin[0]
+}
+moved {
+  from = snowflake_grant_account_role.github_test_dcm_useradmin
+  to   = snowflake_grant_account_role.github_test_dcm_useradmin[0]
+}
+moved {
+  from = snowflake_grant_account_role.github_test_dcm_securityadmin
+  to   = snowflake_grant_account_role.github_test_dcm_securityadmin[0]
+}

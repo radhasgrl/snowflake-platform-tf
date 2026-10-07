@@ -2,17 +2,23 @@ name: Promote to Environment
 
 # Deliberately workflow_dispatch-only -- promotion is always a manual, deliberate action,
 # never automatic. Checks out an EXACT tagged release (not whatever main currently is, see
-# release-please.yml for how tags get created) and deploys DCM's domain TEST/PROD target,
-# gated by that environment's GitHub Environment required-reviewer protection rule.
+# release-please.yml for how tags get created) and applies that SAME tag's Terraform
+# platform layer, then deploys DCM's domain target -- both gated by their own GitHub
+# Environment's required-reviewer protection rule. Terraform runs first, DCM second, same
+# ordering as the continuous DEV pipeline (terraform-apply.yml -> dcm-deploy.yml).
 #
-# Terraform-managed platform resources (OIDC identities, admin databases) are deliberately
-# NOT part of this workflow. Unlike DCM's domain content -- which genuinely changes release
-# to release as a domain's schemas/warehouses/roles evolve -- this repo's Terraform
-# resources are rarely-changing platform scaffolding (identities, admin DBs) created once
-# via the regular, continuous DEV pipeline (terraform-apply.yml). Confirmed: var.environment
-# / local.env (context.tf) are not referenced by any resource in this codebase -- Terraform
-# here has no environment-conditional behavior to promote; every environment's identities
-# are created unconditionally by the one shared DEV pipeline.
+# Terraform IS promoted by tag here, same as DCM -- this corrects an earlier version of
+# this workflow, which treated Terraform as DEV-only on the mistaken assumption that it had
+# no environment-conditional behavior to promote. It does now: oidc_service_user.tf,
+# dcm_home.tf, domain_identities.tf/domain_identities_test.tf and ingestion_aws_infra.tf all
+# gate their resources with `count = local.env == "<TIER>" ? 1 : 0`, so the exact same root
+# module, applied with env/test/test.tfvars against workload/test/terraform.tfstate, creates
+# and manages only TEST-tier resources (GITHUB_TEST_TERRAFORM_SVC, GITHUB_TEST_DCM_SVC,
+# TEST_ADMIN_DB, Customer's TEST dbt/ingest identities) -- not DEV's, and not the shared
+# ingestion AWS infra (which stays DEV-pipeline-owned, see that file's header comment).
+# This is HashiCorp's own documented multi-environment pattern: one DRY module, isolated
+# state per environment, promoted via the same version
+# (https://developer.hashicorp.com/terraform/cloud-docs/recommended-practices).
 
 on:
   workflow_dispatch:
@@ -35,6 +41,62 @@ permissions:
   id-token: write
 
 jobs:
+  # Applies this exact tag's Terraform platform layer against the chosen environment's own
+  # state file (env/<tier>/backend.hcl) before DCM runs -- same Terraform-then-DCM ordering
+  # already enforced on the continuous DEV pipeline, now also enforced during promotion.
+  promote-terraform:
+    name: Promote Terraform (${{ inputs.target_environment }})
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.target_environment }}-Terraform
+
+    env:
+      TF_VAR_snowflake_organization_name: xygpmhm
+      TF_VAR_snowflake_account_name: gq04150
+
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+      - name: Checkout exact tagged release
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version }}
+          persist-credentials: false
+
+      - name: Lowercase target environment (TEST -> test, matches env/ folder names)
+        id: tier
+        run: echo "lower=$(echo '${{ inputs.target_environment }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      # Needed for S3 backend/state access only -- the one shared AWS OIDC role used by
+      # every tier (one AWS account, one state bucket, different key per tier). Not needed
+      # for any actual AWS resource management here: ingestion_aws_infra.tf's resources are
+      # gated DEV-only, so a TEST/PROD apply's plan never touches AWS resources at all.
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::525218385225:role/snowflake-platform-tf-github-oidc
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.0"
+
+      - name: Fetch Snowflake OIDC token
+        run: |
+          TOKEN=$(curl -sSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=snowflakecomputing.com" | jq -r '.value')
+          echo "::add-mask::$TOKEN"
+          echo "SNOWFLAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+
+      - name: Terraform Init
+        run: terraform init -backend-config="env/${{ steps.tier.outputs.lower }}/backend.hcl"
+
+      - name: Terraform Apply
+        run: terraform apply -var-file="env/${{ steps.tier.outputs.lower }}/${{ steps.tier.outputs.lower }}.tfvars" -auto-approve
+
   # Hardcoded to the Customer domain for now -- the only domain with a TEST target today
   # (dcm/domains/customer/manifest.yml's CUSTOMER_TEST target). Generalizing this into a
   # matrix (one job per domain with a target for the chosen environment) is the natural
@@ -42,6 +104,7 @@ jobs:
   # dcm-deploy.yml's existing detect-domains + matrix pattern.
   promote-customer-dcm:
     name: Promote Customer DCM (${{ inputs.target_environment }})
+    needs: promote-terraform
     runs-on: ubuntu-latest
     environment:
       name: ${{ inputs.target_environment }}-DCM
@@ -80,12 +143,13 @@ jobs:
             --no-interactive
 
       # Same rationale as dcm-plan.yml/dcm-deploy.yml's identical step: this identity is
-      # created by Terraform (terraform/domains_test.yaml / oidc_service_user.tf), not by
-      # this workflow -- fails fast with an actionable message if it doesn't exist yet.
+      # created by the promote-terraform job above (oidc_service_user.tf), which this job
+      # depends on via `needs:` -- this is a fail-fast sanity check, not the only guarantee,
+      # in case that job's apply silently no-op'd for a reason that isn't actually fatal.
       - name: Verify ${{ inputs.target_environment }} DCM identity is ready
         run: |
           if ! snow sql -q "SELECT CURRENT_USER();" >/tmp/dcm_identity_check.log 2>&1; then
-            echo "::error::Could not authenticate as $SNOWFLAKE_USER. Has Terraform created this identity yet? See terraform/oidc_service_user.tf / terraform/domains_test.yaml."
+            echo "::error::Could not authenticate as $SNOWFLAKE_USER. Did the promote-terraform job above actually succeed? See terraform/oidc_service_user.tf."
             cat /tmp/dcm_identity_check.log
             exit 1
           fi
