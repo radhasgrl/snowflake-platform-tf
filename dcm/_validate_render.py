@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Local, Snowflake-free validation that a domain's manifest.yml templating config renders
-cleanly against dcm/_template/ — mirrors DCM's actual Jinja2 engine behavior (StrictUndefined,
+cleanly against dcm/sources/ — mirrors DCM's actual Jinja2 engine behavior (StrictUndefined,
 macros auto-visible across all definition files) closely enough to catch the class of bug
 this project already hit once (UndefinedError on an absent optional key).
 
@@ -10,7 +10,7 @@ template *renders* without error for a given domain config. Use it to sanity-che
 domain's manifest.yml before ever pointing live DCM commands at it.
 
 Usage: python _validate_render.py <path-to-manifest.yml> <templating-config-name>
-Example: python _validate_render.py ../domains/procurement/manifest.yml PROCUREMENT
+Example: python _validate_render.py domains/procurement/manifest.yml PROCUREMENT
 """
 import sys
 import pathlib

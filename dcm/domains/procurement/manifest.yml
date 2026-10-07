@@ -9,7 +9,7 @@ targets:
   # that don't exist yet, rather than re-homing already-managed objects between projects.
   #
   # NOT YET DEPLOYED. This manifest exists as a ready-to-use template proving the domain
-  # pattern generalizes beyond Customer — see dcm/_template/_validate_render.py for a
+  # pattern generalizes beyond Customer — see dcm/_validate_render.py for a
   # Snowflake-free check that it renders cleanly. Onboarding this domain for real is just:
   # (1) add a `dcm-deploy-procurement` job to terraform-apply.yml/-plan.yml (copy
   # the Customer job, swap CUSTOMER -> PROCUREMENT), (2) create the

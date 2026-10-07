@@ -73,7 +73,7 @@ jobs:
 
       # No stored password/key — same OIDC workload-identity pattern used by
       # snowflake-platform-tf's Terraform/DCM pipelines. The dbt identity is deliberately
-      # least-privilege (see ../../../dcm/_template/sources/definitions/grants.sql in this
+      # least-privilege (see ../../../dcm/sources/definitions/grants.sql in this
       # repo for the actual grant).
       #
       # Unlike the Snowflake CLI (snowflakedb/snowflake-actions@v3), dbt-snowflake's

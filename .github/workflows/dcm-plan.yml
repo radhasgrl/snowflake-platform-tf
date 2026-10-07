@@ -189,7 +189,7 @@ jobs:
             exit 1
           fi
 
-      # Synthesizes dcm/domains/<domain>/sources/ from dcm/_template/ (see
+      # Synthesizes dcm/domains/<domain>/sources/ from dcm/sources/ (see
       # dcm/sync-domain.sh) — this is what keeps domain onboarding at zero duplicated SQL.
       # Never committed; regenerated fresh on every run.
       - name: Synthesize ${{ matrix.name }} domain sources

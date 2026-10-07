@@ -4,7 +4,7 @@
 -- default warehouse for the Terraform and DCM CI identities' own connections
 -- (GITHUB_DEV_TERRAFORM_SVC / GITHUB_DEV_DCM_SVC — see terraform-plan.yml/-apply.yml),
 -- never by domain workloads (those get their own per-domain warehouses — see
--- dcm/_template/sources/definitions/warehouses.sql).
+-- dcm/sources/definitions/warehouses.sql).
 --
 -- Honest note: Terraform/DCM's own operations here are metadata/DDL only and don't
 -- strictly require active compute to succeed (confirmed empirically — every CI run this
