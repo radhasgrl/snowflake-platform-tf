@@ -1,0 +1,184 @@
+name: dbt Build (reusable)
+
+# Centrally-maintained CI for every per-domain dbt repo — the "centrally-maintained CI"
+# half of Repo 3's "one repo per domain, centrally-maintained CI" plan. Each domain's own
+# dbt repo (e.g. customer-domain-dbt) has a thin wrapper workflow that calls this one via
+# `uses: radhasgrl/snowflake-platform-tf/.github/workflows/dbt-build-reusable.yml@main`.
+# Updating the actual dbt build logic here (a new dbt-snowflake version, a bug fix, a new
+# step) propagates to every domain repo that references this workflow on the next run —
+# no PR needed in each individual domain repo.
+#
+# PR runs build into isolated, PR-scoped schemas (<SCHEMA>_PR_<n> / MARTS_PR_<n>) instead
+# of the real shared schemas — see the calling repo's macros/generate_schema_name.sql for
+# why. Only the push-to-main build targets the real schemas. The "Clean up PR schemas" job
+# (triggered on PR close) drops the ephemeral schemas so they don't accumulate.
+
+on:
+  workflow_call:
+    inputs:
+      domain:
+        description: "Domain name, e.g. 'customer' — used only for logging/clarity."
+        required: true
+        type: string
+      dbt_project_name:
+        description: "Top-level project key in profiles.yml, e.g. 'customer_domain'."
+        required: true
+        type: string
+      account:
+        required: true
+        type: string
+      user:
+        description: "Snowflake OIDC service user, e.g. GITHUB_DEV_DBT_SVC."
+        required: true
+        type: string
+      role:
+        required: true
+        type: string
+      warehouse:
+        required: true
+        type: string
+      database:
+        required: true
+        type: string
+      schema:
+        description: "Initial dbt profile schema, e.g. STAGING."
+        required: true
+        type: string
+      github_environment:
+        description: "GitHub Environment in the CALLING repo to run under, e.g. DEV-dbt."
+        required: true
+        type: string
+
+jobs:
+  dbt-build:
+    name: dbt Build (${{ inputs.domain }})
+    # Skip on the PR-closed event (that event only exists to trigger cleanup-pr-schemas
+    # below) — a closed/merged PR shouldn't trigger a fresh isolated-schema build.
+    if: github.event_name != 'pull_request' || github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.github_environment }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dbt-snowflake
+        run: pip install dbt-snowflake>=1.12.1
+
+      # No stored password/key — same OIDC workload-identity pattern used by
+      # snowflake-platform-tf's Terraform/DCM pipelines. The dbt identity is deliberately
+      # least-privilege (see ../../../dcm/_template/sources/definitions/grants.sql in this
+      # repo for the actual grant).
+      #
+      # Unlike the Snowflake CLI (snowflakedb/snowflake-actions@v3), dbt-snowflake's
+      # workload_identity authenticator does not fetch the GitHub OIDC token itself — it
+      # must be fetched and passed explicitly via the `token` profile field.
+      - name: Fetch Snowflake OIDC token
+        run: |
+          TOKEN=$(curl -sSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=snowflakecomputing.com" | jq -r '.value')
+          echo "::add-mask::$TOKEN"
+          echo "SNOWFLAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+
+      # Empty on push-to-main (targets the real schemas). Set to "_PR_<number>" on
+      # pull_request, consumed by the calling repo's macros/generate_schema_name.sql to
+      # isolate PR builds into their own schemas.
+      - name: Compute PR schema suffix
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "DBT_SCHEMA_SUFFIX=_PR_${{ github.event.pull_request.number }}" >> "$GITHUB_ENV"
+          else
+            echo "DBT_SCHEMA_SUFFIX=" >> "$GITHUB_ENV"
+          fi
+
+      - name: Configure dbt profile (OIDC workload identity)
+        run: |
+          mkdir -p ~/.dbt
+          cat > ~/.dbt/profiles.yml <<EOF
+          ${{ inputs.dbt_project_name }}:
+            target: dev
+            outputs:
+              dev:
+                type: snowflake
+                account: ${{ inputs.account }}
+                user: ${{ inputs.user }}
+                role: ${{ inputs.role }}
+                authenticator: workload_identity
+                workload_identity_provider: OIDC
+                token: "$SNOWFLAKE_TOKEN"
+                warehouse: ${{ inputs.warehouse }}
+                database: ${{ inputs.database }}
+                schema: ${{ inputs.schema }}
+                threads: 2
+          EOF
+
+      - name: dbt debug
+        run: dbt debug
+
+      - name: dbt build
+        id: dbt_build
+        # set -o pipefail: without it, this step's exit code is tee's (always 0), so a
+        # real dbt test failure would be silently reported as a passing step/job.
+        run: |
+          set -o pipefail
+          dbt build 2>&1 | tee dbt_build_output.txt
+        continue-on-error: true
+
+      - name: Post build summary as PR comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const output = fs.readFileSync('dbt_build_output.txt', 'utf8');
+            const truncated = output.length > 60000 ? output.slice(0, 60000) + '\n\n...output truncated' : output;
+            const schemaNote = `Built into isolated preview schemas: \`${{ inputs.schema }}_PR_${context.issue.number}\` / \`MARTS_PR_${context.issue.number}\` (not the real schemas).`;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## dbt Build (preview, ${{ inputs.domain }})\n${schemaNote}\n\`\`\`\n${truncated}\n\`\`\``
+            });
+
+      - name: Fail if dbt build failed
+        if: steps.dbt_build.outcome == 'failure'
+        run: exit 1
+
+  cleanup-pr-schemas:
+    name: Clean up PR schemas (${{ inputs.domain }})
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    environment:
+      name: ${{ inputs.github_environment }}
+
+    steps:
+      - name: Setup Snowflake CLI (OIDC)
+        uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
+
+      - name: Create default Snowflake CLI connection (OIDC)
+        run: |
+          snow connection add \
+            --connection-name github \
+            --account ${{ inputs.account }} \
+            --user ${{ inputs.user }} \
+            --role ${{ inputs.role }} \
+            --warehouse ${{ inputs.warehouse }} \
+            --authenticator WORKLOAD_IDENTITY \
+            --workload-identity-provider OIDC \
+            --default \
+            --no-interactive
+
+      # Safe even if the PR's build never ran (e.g. PR closed without triggering CI) or
+      # already ran cleanup — IF EXISTS makes this a no-op in that case.
+      - name: Drop ephemeral PR schemas
+        run: |
+          snow sql -q "DROP SCHEMA IF EXISTS ${{ inputs.database }}.${{ inputs.schema }}_PR_${{ github.event.pull_request.number }};"
+          snow sql -q "DROP SCHEMA IF EXISTS ${{ inputs.database }}.MARTS_PR_${{ github.event.pull_request.number }};"
