@@ -42,7 +42,7 @@ CHANGED_FILES="$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")"
 # The shared template affects every domain's rendered SQL -- a template change means every
 # active domain must be replanned/redeployed, not just whichever domain's own folder
 # happened to also change in the same commit.
-if echo "${CHANGED_FILES}" | grep -q '^dcm/_template/'; then
+if echo "${CHANGED_FILES}" | grep -q '^dcm/sources/'; then
   jq -c . "${ACTIVE_DOMAINS_FILE}"
   exit 0
 fi

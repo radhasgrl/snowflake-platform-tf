@@ -41,7 +41,7 @@ This repo is **Repo 1 of a 3-repo platform**, pairing Terraform with Snowflake's
   Repo 2 itself contains ingestion **code** only, no infrastructure.
 - **DCM** (`dcm/`) owns the database object layer: databases, schemas, warehouses, tiered
   RBAC roles, DB grants, and placeholder masking/row-access policies
-  (`dcm/_template/sources/definitions/*.sql`).
+  (`dcm/sources/definitions/*.sql`).
 
 Identities are scoped to **GitHub Environments** (`DEV-Terraform`, `DEV-DCM`, and each
 downstream repo's own environment — `DEV-Ingest` in Repo 2, `DEV-dbt` in Repo 3), not to a
@@ -85,7 +85,7 @@ Snowflake Account: xygpmhm-gq04150
  └── DCM-managed objects: DEV_CUSTOMER_DB (Customer domain — RAW/STAGING/MARTS/SHARED
      schemas), this domain's own dedicated warehouses, tiered RBAC roles
      (DEV_CUSTOMER_DATA_ENGINEER_PRSN, DEV_CUSTOMER_INGEST_FNCRL, DEV_CUSTOMER_DB.RAW_SCRL_R/_W,
-     DEV_CUSTOMER_INGEST_WH_WHRL_U/_M/_O, etc. — see dcm/_template/sources/definitions/roles.sql,
+     DEV_CUSTOMER_INGEST_WH_WHRL_U/_M/_O, etc. — see dcm/sources/definitions/roles.sql,
      database_roles.sql, grants.sql, warehouses.sql), grants, and placeholder
      masking/row-access policies
 ```
@@ -141,27 +141,26 @@ Nothing Terraform-related lives outside `terraform/`; nothing DCM-related lives 
 │   │   └── sources/definitions/       #   hand-written (never repeated per domain, so no
 │   │       └── warehouses.sql         #   templating needed) — matches the infra-platform
 │   │                                 #   reference's own account-level dcm/manifest.yml.
-│   ├── _template/                    # THE canonical, domain-agnostic template — never
-│   │   ├── sources/                  #   duplicated per domain. Fully Jinja2-templated.
-│   │   │   ├── definitions/
-│   │   │   │   ├── databases.sql
-│   │   │   │   ├── schemas.sql
-│   │   │   │   ├── warehouses.sql    # per-domain workload warehouses + Tier 4 roles
-│   │   │   │   ├── roles.sql         # Tier 1 persona, Tier 2 functional
-│   │   │   │   ├── database_roles.sql # Tier 3 database roles (schema-scoped read/write)
-│   │   │   │   ├── grants.sql        # wires Tier 3/4 -> Tier 2 -> Tier 1
-│   │   │   │   ├── masking.sql
-│   │   │   │   ├── row_access.sql
-│   │   │   │   └── tables.sql        # RAW.CUSTOMERS — loaded by Repo 2, read by Repo 3
-│   │   │   └── macros/
-│   │   │       └── domain_macros.sql # reusable naming/role/grant macros, shared by every domain
-│   │   └── _validate_render.py       # offline, Snowflake-free check that a domain's
-│   │                                 #   manifest.yml renders cleanly against this template
+│   ├── sources/                      # THE canonical, domain-agnostic template — never
+│   │   ├── definitions/              #   duplicated per domain. Fully Jinja2-templated.
+│   │   │   ├── databases.sql
+│   │   │   ├── schemas.sql
+│   │   │   ├── warehouses.sql        # per-domain workload warehouses + Tier 4 roles
+│   │   │   ├── roles.sql             # Tier 1 persona, Tier 2 functional
+│   │   │   ├── database_roles.sql    # Tier 3 database roles (schema-scoped read/write)
+│   │   │   ├── grants.sql            # wires Tier 3/4 -> Tier 2 -> Tier 1
+│   │   │   ├── masking.sql
+│   │   │   ├── row_access.sql
+│   │   │   └── tables.sql            # RAW.CUSTOMERS — loaded by Repo 2, read by Repo 3
+│   │   └── macros/
+│   │       └── domain_macros.sql     # reusable naming/role/grant macros, shared by every domain
+│   ├── _validate_render.py           # offline, Snowflake-free check that a domain's
+│   │                                 #   manifest.yml renders cleanly against dcm/sources/
 │   ├── domains/
 │   │   ├── customer/
 │   │   │   ├── manifest.yml          # Customer's own config — schemas, personas, functional
 │   │   │   │                         #   roles, warehouses, tables. Zero SQL. LIVE/deployed.
-│   │   │   └── sources/              # SYNTHESIZED by sync-domain.sh from _template/ —
+│   │   │   └── sources/              # SYNTHESIZED by sync-domain.sh from dcm/sources/ —
 │   │   │                             #   gitignored, never committed, regenerated every run
 │   │   └── procurement/
 │   │       └── manifest.yml          # Domain #2 TEMPLATE — proves the pattern generalizes
@@ -172,7 +171,7 @@ Nothing Terraform-related lives outside `terraform/`; nothing DCM-related lives 
 │   │                                 #   today; Procurement is deliberately absent)
 │   ├── detect-changed-domains.sh     # diffs changed files -> which active domains' jobs
 │   │                                 #   should run this CI run (keeps CI load flat at scale)
-│   └── sync-domain.sh                # copies _template/ into dcm/domains/<domain>/sources/
+│   └── sync-domain.sh                # copies dcm/sources/ into dcm/domains/<domain>/sources/
 │                                     #   immediately before every snow dcm plan/deploy
 │
 ├── .github/
@@ -213,7 +212,7 @@ silently drifting.
 |---|---|
 | `GITHUB_DEV_INGEST_SVC` identity + `DEV_CUSTOMER_INGEST_SERVICE_PRSN` role | Repo 2 (`data-ingestion-raw`) authenticates as this identity to deploy/run its Snowpipe SQL |
 | `GITHUB_DEV_DBT_SVC` identity + `DEV_CUSTOMER_DBT_SERVICE_PRSN` role | Repo 3 (`customer-domain-dbt`) authenticates as this identity to run `dbt build` |
-| `DEV_CUSTOMER_DB.RAW.CUSTOMERS` table (`dcm/_template/sources/definitions/tables.sql`) | Repo 2 loads into it; Repo 3 reads it as a dbt source |
+| `DEV_CUSTOMER_DB.RAW.CUSTOMERS` table (`dcm/sources/definitions/tables.sql`) | Repo 2 loads into it; Repo 3 reads it as a dbt source |
 | `DEV_CUSTOMER_DB.STAGING` / `.MARTS` schemas, `DEV_CUSTOMER_TRANSFORM_WH` warehouse | Repo 3 builds its dbt models into these |
 | S3 bucket `data-ingestion-raw-525218385225` + 2 IAM roles (`terraform/ingestion_aws_infra.tf`) | Repo 2's CI assumes one role to manage the bucket; Snowflake's storage integration assumes the other to read it |
 | `.github/workflows/dbt-build-reusable.yml` (`workflow_call`) | Every per-domain dbt repo (Repo 3 and its future siblings) calls this instead of defining its own dbt build logic — see "Centrally-maintained CI for Repo 3" below |
@@ -380,7 +379,7 @@ Push to main touching dcm/**
 ```
 
 A domain only ever gets a `dcm-plan`/`dcm-deploy` job if (a) its own `dcm/domains/<domain>/`
-files changed, or (b) the shared `dcm/_template/` changed (which affects every domain), AND
+files changed, or (b) the shared `dcm/sources/` changed (which affects every domain), AND
 (c) it's listed in `dcm/active_domains.json`. This is what keeps CI load flat as domains
 scale into the hundreds — a PR touching one domain's manifest never replans/redeploys every
 other domain too. See `dcm/detect-changed-domains.sh` and README's "Onboarding a New Domain"
@@ -543,14 +542,14 @@ from generic to Customer-domain-scoped at the same time:
 | `DEV_DATA_ENGINEER` / `_ANALYST` / `_CONSUMER` / `DEV_DBT_RUNNER` | Tiered: `DEV_CUSTOMER_*_PRSN` → `DEV_CUSTOMER_*_FNCRL` → `DEV_CUSTOMER_DB.*_SCRL_*` / `DEV_CUSTOMER_*_WH_WHRL_*` |
 
 DCM's hand-written SQL was later rewritten into a reusable, Jinja2-templated structure
-(`dcm/_template/`) so a new domain needs zero new SQL — only a new
+(`dcm/sources/`) so a new domain needs zero new SQL — only a new
 `dcm/domains/<domain>/manifest.yml`. As part of that work, warehouses were also renamed from
 generic/shared (`DEV_INGEST_WH`/`DEV_TRANSFORM_WH`/`DEV_REPORTING_WH`) to per-domain
 (`DEV_CUSTOMER_INGEST_WH`/`DEV_CUSTOMER_TRANSFORM_WH`/`DEV_CUSTOMER_REPORTING_WH`) —
 matching the reference architecture's convention that domain workload warehouses are never
 shared across domains (only genuine platform/CI tooling warehouses would be, and this
 platform doesn't currently have any). The current, live definitions for all of the above are
-`dcm/_template/sources/definitions/databases.sql`, `schemas.sql`, `warehouses.sql`,
+`dcm/sources/definitions/databases.sql`, `schemas.sql`, `warehouses.sql`,
 `roles.sql`, `database_roles.sql`, and `grants.sql`, with the actual per-domain values in
 `dcm/domains/customer/manifest.yml` — treat those files, not this table, as the source of
 truth going forward.
@@ -573,8 +572,8 @@ hypothetical. `dcm/domains/procurement/manifest.yml` exists in this repo right n
 
 2. **Validate it renders cleanly, offline, before touching Snowflake.**
    ```powershell
-   cd dcm/_template
-   python _validate_render.py ../domains/<domain>/manifest.yml <CONFIG_NAME>
+   cd dcm
+   python _validate_render.py domains/<domain>/manifest.yml <CONFIG_NAME>
    ```
    This runs the same Jinja2 macros DCM itself uses, in `StrictUndefined` mode, against
    every file in `sources/definitions/` — it catches the exact class of bug this project
@@ -619,7 +618,7 @@ actually needed for a real client domain.
 Log in to `https://xygpmhm-gq04150.snowflakecomputing.com` as `RADHAASINGH` and run:
 
 ```sql
--- Verify Customer domain database (DCM-managed, see dcm/_template/sources/definitions/)
+-- Verify Customer domain database (DCM-managed, see dcm/sources/definitions/)
 SHOW DATABASES LIKE '%DEV%';
 -- Expect: DEV_CUSTOMER_DB, DEV_ADMIN_DB
 
@@ -717,7 +716,7 @@ build covers:
   (new GitHub Environment pair, new OIDC service-user pair, new DCM manifest target) — not
   a redesign.
 - **Masking/row-access policies are inert placeholders**
-  (`dcm/_template/sources/definitions/masking.sql`, `row_access.sql`) — pass-through/allow-all,
+  (`dcm/sources/definitions/masking.sql`, `row_access.sql`) — pass-through/allow-all,
   pending client-confirmed PII/RLS rules.
 - **No human-identity path.** Every identity in this repo is a service account (OIDC
   workload identity); there's no SSO/SCIM/MFA/network-policy story modeled here.
@@ -732,7 +731,7 @@ build covers:
 
 | Item | Scope | Status |
 |---|---|---|
-| RBAC | Tiered persona → functional → database/warehouse roles | ✅ Implemented (`dcm/_template/sources/definitions/roles.sql`, `database_roles.sql`, `grants.sql`) |
+| RBAC | Tiered persona → functional → database/warehouse roles | ✅ Implemented (`dcm/sources/definitions/roles.sql`, `database_roles.sql`, `grants.sql`) |
 | Masking / row-access policies | PII/RLS enforcement | 🟡 Scaffolded as placeholders; real rules pending client input |
 | dbt integration | Repo 3 (`customer-domain-dbt`) — staging → marts | ✅ Implemented and verified end-to-end |
 | Ingestion | Repo 2 (`data-ingestion-raw`) — Snowpipe S3 → RAW | ✅ Implemented and verified end-to-end |

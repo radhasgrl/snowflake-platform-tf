@@ -4,7 +4,7 @@ type: DCM_PROJECT
 default_target: ACCOUNT
 
 # Account-level DCM project — genuinely platform-wide, never repeated per domain (unlike
-# dcm/domains/<domain>/, which is instantiated once per domain from dcm/_template/). This
+# dcm/domains/<domain>/, which is instantiated once per domain from dcm/sources/). This
 # is a single, hand-written, non-templated project, matching the infra-platform reference's
 # own dcm/manifest.yml (account_warehouses: DEPLOY/PLATFORM) — the reference doesn't
 # template its account-level project either, since there's only ever one of it.

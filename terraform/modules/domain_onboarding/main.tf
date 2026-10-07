@@ -16,7 +16,7 @@ terraform {
 # dbt identity — deliberately least-privilege, unlike the Terraform/DCM identities in
 # ../../oidc_service_user.tf. This user gets no admin role grants from Terraform at all;
 # DCM grants it only the DEV_<DOMAIN>_DBT_SERVICE_PRSN persona role it actually needs (see
-# ../../../dcm/_template/sources/definitions/grants.sql), demonstrating the tiered RBAC
+# ../../../dcm/sources/definitions/grants.sql), demonstrating the tiered RBAC
 # model in practice for a real downstream workload.
 resource "snowflake_execute" "domain_dbt_service_user" {
   for_each = var.domains
@@ -38,7 +38,7 @@ resource "snowflake_execute" "domain_dbt_service_user" {
 
 # Ingestion identity — same least-privilege pattern as the dbt identity above. DCM grants it
 # DEV_<DOMAIN>_INGEST_SERVICE_PRSN only (see
-# ../../../dcm/_template/sources/definitions/grants.sql), which in turn only carries
+# ../../../dcm/sources/definitions/grants.sql), which in turn only carries
 # DEV_<DOMAIN>_INGEST_FNCRL — enough to create/manage the storage integration, stage, file
 # format and pipe, and load into that domain's RAW schema, nothing more. Repo 2
 # (data-ingestion-raw) stays one shared repo across domains; what's per-domain here is the
