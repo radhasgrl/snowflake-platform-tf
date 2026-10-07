@@ -1,0 +1,17 @@
+# TEST-tier mirror of domains.yaml -- same per-domain schema, kept in a SEPARATE file so
+# DEV and TEST identity lifecycles are fully decoupled: onboarding a new domain to DEV
+# doesn't require it to exist in TEST too, and vice versa (e.g. Procurement is DEV-only
+# today and deliberately has no entry here). See domains.yaml's own header comment for the
+# full per-field explanation -- the schema is identical, just TEST-scoped values.
+customer:
+  dbt_service_user: "GITHUB_TEST_CUSTOMER_DBT_SVC"
+  dbt_repo: "customer-domain-dbt"
+  dbt_repo_label: "customer-domain-dbt (Repo 3)"
+  dbt_repo_id: "1405522917"
+  dbt_github_environment: "TEST-dbt"
+
+  ingest_service_user: "GITHUB_TEST_CUSTOMER_INGEST_SVC"
+  ingest_repo: "data-ingestion-raw"
+  ingest_repo_label: "data-ingestion-raw (Repo 2)"
+  ingest_repo_id: "1405785591"
+  ingest_github_environment: "TEST-Ingest"
