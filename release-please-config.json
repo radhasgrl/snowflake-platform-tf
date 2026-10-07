@@ -1,10 +1,10 @@
 {
   "release-type": "simple",
+  "include-component-in-tag": false,
   "packages": {
     ".": {
       "release-type": "simple",
-      "initial-version": "1.0.0",
-      "component": "snowflake-platform-tf"
+      "initial-version": "1.0.0"
     }
   }
 }
