@@ -125,7 +125,7 @@ templating:
     # warehouses, functional_roles, tables: these are domain-structural, not
     # environment-specific), differing only in env (-> TEST_CUSTOMER_DB naming, via
     # db_name() in domain_macros.sql) and the two service personas' oidc_user values,
-    # which point at the TEST-scoped identities (terraform/domains_test.yaml) instead of
+    # which point at the TEST-scoped identities (terraform/domains/test/customer.yaml) instead of
     # DEV's -- reusing DEV's identities here would grant a DEV identity TEST-tier roles,
     # defeating the whole point of having separate tiers.
     CUSTOMER_TEST:

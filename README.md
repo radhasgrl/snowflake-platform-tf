@@ -121,14 +121,23 @@ Nothing Terraform-related lives outside `terraform/`; nothing DCM-related lives 
 │   │   └── prod/                     # scaffolded, not yet wired into any pipeline
 │   │
 │   ├── oidc_service_user.tf          # Platform-level OIDC identities (Terraform + DCM engines)
-│   ├── domain_identities.tf          # Instantiates modules/domain_onboarding/ for every
-│   │                                 #   domain in domains.yaml
-│   ├── domains.yaml                  # Single source of truth — onboarding a domain = one
-│   │                                 #   new top-level entry here, nothing else
+│   ├── domain_identities.tf          # Instantiates modules/domain_onboarding/, merging
+│   │                                 #   every *.yaml file under domains/dev/ into one map
+│   ├── domain_identities_test.tf     # Same, for TEST-tier identities (domains/test/)
+│   ├── domains/
+│   │   ├── dev/
+│   │   │   ├── customer.yaml         # One file per onboarded domain — onboarding domain
+│   │   │   │                         #   #2 means adding one new file here, never editing
+│   │   │   │                         #   an existing domain's file or a shared one
+│   │   │   └── procurement.yaml.example  # Inert template — wrong extension on purpose,
+│   │   │                             #   fileset()'s "*.yaml" glob can't match it
+│   │   └── test/
+│   │       └── customer.yaml         # TEST-tier mirror — a domain can exist in DEV
+│   │                                 #   without existing in TEST yet, or vice versa
 │   ├── modules/
 │   │   └── domain_onboarding/        # Reusable module: per-domain dbt + ingest OIDC
 │   │       ├── main.tf               #   identity resources, for_each-driven over
-│   │       └── variables.tf          #   var.domains (populated from domains.yaml)
+│   │       └── variables.tf          #   var.domains (populated from domains/<tier>/*.yaml)
 │   ├── dcm_home.tf                   # DEV_ADMIN_DB.DCM, the DCM project's own home
 │   ├── ingestion_aws_infra.tf        # Repo 2's S3 bucket + IAM roles (provisioned here, not in Repo 2)
 │   ├── context.tf, providers.tf, terraform.tf, variables.tf, outputs.tf
@@ -317,8 +326,8 @@ terraform init -backend-config="env/dev/backend.hcl"
 Its first successful `terraform apply` creates the GitHub OIDC service users
 (`GITHUB_DEV_TERRAFORM_SVC`, `GITHUB_DEV_DCM_SVC` in `terraform/oidc_service_user.tf`;
 `GITHUB_DEV_DBT_SVC`, `GITHUB_DEV_INGEST_SVC` via `modules/domain_onboarding/`, configured
-in `terraform/domains.yaml`) that every subsequent CI run, and Repos 2/3's pipelines,
-authenticate as.
+in `terraform/domains/dev/customer.yaml`) that every subsequent CI run, and Repos 2/3's
+pipelines, authenticate as.
 
 ### Mandatory notes
 - Both bootstrap stacks' local state files (`terraform/bootstrap/*/terraform.tfstate`) are
@@ -713,13 +722,15 @@ hypothetical. `dcm/domains/procurement/manifest.yml` exists in this repo right n
    hit once for real (an optional manifest key missing a `| default(...)` guard) without
    ever creating or touching a live Snowflake object.
 
-3. **Add one new top-level entry to `terraform/domains.yaml`** —
-   `GITHUB_DEV_<DOMAIN>_DBT_SVC` (scoped to that domain's own dbt repo) and
+3. **Add one new file, `terraform/domains/dev/<domain>.yaml`** (copy
+   `domains/dev/procurement.yaml.example`, drop the `.example` extension, fill in the
+   placeholders) — `GITHUB_DEV_<DOMAIN>_DBT_SVC` (scoped to that domain's own dbt repo) and
    `GITHUB_DEV_<DOMAIN>_INGEST_SVC` (scoped to a new GitHub Environment in the shared
    ingestion repo, e.g. `DEV-Ingest-<Domain>`) — referenced by the manifest's
    `DBT_SERVICE`/`INGEST_SERVICE` persona `oidc_user` fields from step 1. Nothing in
-   `terraform/modules/domain_onboarding/` ever needs to change — it's driven entirely by
-   this file.
+   `terraform/modules/domain_onboarding/`, `domain_identities.tf`, or any other domain's
+   file ever needs to change — `domain_identities.tf` merges every `*.yaml` file under
+   `domains/dev/` automatically.
 
 4. **Add one new entry to `dcm/active_domains.json`** — `{"name": "<domain>", "target":
    "<DOMAIN>"}`. This is the single switch that turns the domain "on" for CI: the

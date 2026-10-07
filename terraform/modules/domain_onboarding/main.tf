@@ -1,7 +1,8 @@
 # Per-domain OIDC identities for Repo 3 (dbt) and Repo 2 (ingestion) — one module
 # instantiation covers every onboarded domain via `for_each`, driven entirely by the
-# `domains` input variable (populated from ../../domains.yaml, the actual single source of
-# truth). Onboarding domain #2+ is: add one more entry to domains.yaml — nothing in this
+# `domains` input variable (populated by merging every ../../domains/<tier>/*.yaml file,
+# the actual single source of truth). Onboarding domain #2+ is: add one new
+# ../../domains/dev/<domain>.yaml file — nothing in this
 # module ever changes.
 
 terraform {

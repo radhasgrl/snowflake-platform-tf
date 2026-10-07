@@ -1,5 +1,5 @@
 variable "domains" {
-  description = "Map of domain name -> per-domain OIDC identity config. One entry per onboarded domain. Populated from ../../domains.yaml (the actual single source of truth) via yamldecode in the root module — never hand-edited here."
+  description = "Map of domain name -> per-domain OIDC identity config. One entry per onboarded domain. Populated by merging every ../../domains/<tier>/*.yaml file (one file per domain, the actual single source of truth) via yamldecode in the root module — never hand-edited here."
   type = map(object({
     dbt_service_user          = string
     dbt_repo                  = string
