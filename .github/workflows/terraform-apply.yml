@@ -1,17 +1,23 @@
 name: Terraform Apply
 
-# Terraform-only — DCM has its own dcm-deploy.yml (separate file, separate trigger paths).
-# See the matching comment at the top of terraform-plan.yml for the full rationale, and
-# dcm-deploy.yml's own header comment for how the Terraform -> DCM identity dependency is
-# handled now that they're no longer in the same file (short version: dcm-deploy.yml
-# fails fast with a clear message if Terraform hasn't created its identity yet, rather
-# than relying on a same-file `needs:`).
+# Terraform runs FIRST, DCM runs SECOND, always, one after another -- per client
+# direction. dcm-deploy.yml now triggers via `workflow_run` on THIS workflow's completion,
+# gated on success (`if: github.event.workflow_run.conclusion == 'success'`), guaranteeing
+# DCM never deploys without a confirmed-successful Terraform apply immediately before it.
+# This replaces the earlier "Verify DCM identity is ready" fail-fast check in dcm-deploy.yml
+# -- that was a workaround for the lack of a real ordering guarantee; now there is one.
+#
+# Path filter includes dcm/** as well as terraform/** so a DCM-only push also runs
+# Terraform Apply first, giving dcm-deploy.yml something to chain from. Unlike the plan
+# side, this needs no Checks API workaround -- by the time a push to main happens, the PR
+# is already merged and required checks already passed, so there's no PR left to gate.
 
 on:
   push:
     branches: [main]
     paths:
       - "terraform/**"
+      - "dcm/**"
       - ".github/workflows/terraform-apply.yml"
   workflow_dispatch:
 

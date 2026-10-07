@@ -1,17 +1,25 @@
 name: DCM Deploy
 
-# DCM-only — Terraform has its own terraform-apply.yml. See dcm-plan.yml's header comment
-# for the full split rationale and how the Terraform -> DCM identity ordering dependency
-# is handled now that the two tools' pipelines are no longer in the same file (each DCM
-# job below verifies its own identity is ready and fails fast with a clear message if not,
-# instead of relying on a same-file `needs: apply`).
+# Terraform runs FIRST, DCM runs SECOND -- per client direction. This workflow is triggered
+# by terraform-apply.yml FINISHING (`workflow_run`), guarded by
+# `if: github.event.workflow_run.conclusion == 'success'`, so DCM Deploy can never run
+# without a confirmed-successful Terraform Apply immediately before it. This replaces the
+# earlier "Verify DCM identity is ready" fail-fast check -- that was a workaround for the
+# lack of a real ordering guarantee; now there is one.
+#
+# Unlike dcm-plan.yml, this needs no Checks API workaround: by the time a push to main
+# happens, the PR is already merged and required checks already passed, so there's no PR
+# left to gate -- the workflow_run limitation (results invisible to a PR) simply doesn't
+# apply here.
+#
+# Also simplified from a per-domain matrix to ONE sequential job (per client direction) --
+# see dcm-plan.yml's header comment for the full rationale (matrix job names can't be
+# required checks anyway, and that's moot here, but the simplification applies equally).
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "dcm/**"
-      - ".github/workflows/dcm-deploy.yml"
+  workflow_run:
+    workflows: ["Terraform Apply"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -19,40 +27,10 @@ permissions:
   id-token: write
 
 jobs:
-  detect-domains:
-    name: Detect Changed Domains
-    runs-on: ubuntu-latest
-    outputs:
-      domains: ${{ steps.detect.outputs.domains }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      # Only domains listed in dcm/active_domains.json ever get a job here — see the
-      # matching comment in dcm-plan.yml's detect-domains job.
-      - name: Detect which domains changed
-        id: detect
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            DOMAINS=$(bash dcm/detect-changed-domains.sh ALL)
-          else
-            DOMAINS=$(bash dcm/detect-changed-domains.sh "${{ github.event.before }}" "${{ github.sha }}")
-          fi
-          echo "Domains to deploy: $DOMAINS"
-          echo "domains=$DOMAINS" >> "$GITHUB_OUTPUT"
-
   dcm-deploy:
-    name: DCM Deploy (${{ matrix.name }})
+    name: DCM Deploy
     runs-on: ubuntu-latest
-    needs: detect-domains
-    if: needs.detect-domains.outputs.domains != '[]'
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJson(needs.detect-domains.outputs.domains) }}
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     environment:
       name: DEV-DCM
 
@@ -66,10 +44,38 @@ jobs:
         working-directory: dcm
 
     steps:
+      # workflow_run gives the exact commit that triggered Terraform Apply -- for a push
+      # event (the only realistic trigger here), that's always main's new tip.
+      - name: Resolve head commit to deploy
+        id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "head_sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "head_sha=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ steps.resolve.outputs.head_sha }}
+          fetch-depth: 0
           persist-credentials: false
+
+      # workflow_run's payload has no equivalent of push's `github.event.before` (the
+      # previous tip of main) -- confirmed via GitHub's own event schema. With full git
+      # history available (fetch-depth: 0 above) and this repo's enforced linear history
+      # (required_linear_history, see branch protection), the immediate parent commit is
+      # exactly the previous tip for workflow_dispatch and for the realistic case here
+      # (one merge = one new commit on main).
+      - name: Resolve base commit for diffing
+        id: base
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "base_sha=0000000000000000000000000000000000000000" >> "$GITHUB_OUTPUT"
+          else
+            echo "base_sha=$(git rev-parse ${{ steps.resolve.outputs.head_sha }}^)" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Setup Snowflake CLI (OIDC)
         uses: snowflakedb/snowflake-actions@v3
@@ -88,27 +94,34 @@ jobs:
             --default \
             --no-interactive
 
-      # See the identical "Verify DCM identity is ready" step in dcm-plan.yml for why this
-      # exists now that DCM and Terraform no longer share a workflow file.
-      - name: Verify DCM identity is ready
+      # Only domains listed in dcm/active_domains.json ever get deployed below -- see the
+      # matching comment in dcm-plan.yml.
+      - name: Detect which domains changed
+        id: detect
         run: |
-          if ! snow sql -q "SELECT CURRENT_USER();" >/tmp/dcm_identity_check.log 2>&1; then
-            echo "::error::Could not authenticate as $SNOWFLAKE_USER. This almost always means Terraform hasn't created this identity yet (see terraform/oidc_service_user.tf) -- run the 'Terraform Apply' workflow first, then re-run this one."
-            cat /tmp/dcm_identity_check.log
-            exit 1
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            DOMAINS=$(bash detect-changed-domains.sh ALL)
+          else
+            DOMAINS=$(bash detect-changed-domains.sh "${{ steps.base.outputs.base_sha }}" "${{ steps.resolve.outputs.head_sha }}")
           fi
+          echo "Domains to deploy: $DOMAINS"
+          echo "domains=$DOMAINS" >> "$GITHUB_OUTPUT"
 
-      # Synthesizes dcm/domains/<domain>/sources/ from dcm/sources/ (see
-      # dcm/sync-domain.sh) — this is what keeps domain onboarding at zero duplicated SQL.
-      # Never committed; regenerated fresh on every run.
-      - name: Synthesize ${{ matrix.name }} domain sources
-        run: bash sync-domain.sh ${{ matrix.name }}
-
-      # `snow dcm deploy`/`plan` require the DCM Project object itself to already exist —
-      # unlike `CREATE USER IF NOT EXISTS`-style idempotency elsewhere, DCM has a separate
-      # create step. --if-not-exists makes this safe to run on every deploy.
-      - name: Create DCM project (idempotent)
-        run: snow dcm create --target ${{ matrix.target }} --from domains/${{ matrix.name }} --if-not-exists
-
-      - name: DCM Deploy
-        run: snow dcm deploy --target ${{ matrix.target }} --from domains/${{ matrix.name }}
+      # Sequential loop replacing the old per-domain matrix -- each domain is still
+      # synthesized from dcm/sources/ and deployed independently; one domain's failure
+      # doesn't stop the loop from still attempting every other domain.
+      - name: Deploy each changed domain
+        run: |
+          OVERALL_STATUS=0
+          for row in $(echo '${{ steps.detect.outputs.domains }}' | jq -c '.[]'); do
+            NAME=$(echo "$row" | jq -r '.name')
+            TARGET=$(echo "$row" | jq -r '.target')
+            echo "::group::DCM Deploy - $NAME"
+            bash sync-domain.sh "$NAME"
+            snow dcm create --target "$TARGET" --from "domains/$NAME" --if-not-exists
+            if ! snow dcm deploy --target "$TARGET" --from "domains/$NAME"; then
+              OVERALL_STATUS=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $OVERALL_STATUS
