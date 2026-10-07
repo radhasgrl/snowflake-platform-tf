@@ -16,6 +16,16 @@ targets:
     account_identifier: xygpmhm-gq04150
     templating_config: CUSTOMER
 
+  # TEST tier — a brand-new DCM project (nothing pre-existing to adopt here, unlike
+  # CUSTOMER/DEV above), homed in TEST_ADMIN_DB.DCM (see terraform/dcm_home.tf) rather than
+  # DEV_ADMIN_DB.DCM, keeping environment tiers isolated down to the project container
+  # itself. Deployed only by promote.yml (workflow_dispatch, approval-gated), never by the
+  # regular dcm-plan.yml/dcm-deploy.yml PR/push pipelines, which are DEV-only.
+  CUSTOMER_TEST:
+    project_name: TEST_ADMIN_DB.DCM.CUSTOMER_DCM
+    account_identifier: xygpmhm-gq04150
+    templating_config: CUSTOMER_TEST
+
 templating:
   configurations:
     CUSTOMER:
@@ -76,6 +86,103 @@ templating:
         - name: INGEST_SERVICE
           comment: "the Snowpipe ingestion service identity (Repo 2, data-ingestion-raw) that loads Customer domain RAW data"
           oidc_user: GITHUB_DEV_INGEST_SVC
+          functional_roles: [INGEST]
+
+      functional_roles:
+        - name: INGEST
+          comment: "land data into Customer domain RAW"
+          database_role_grants:
+            - {schema: RAW, level: W}
+          warehouse_grants:
+            - {purpose: INGEST, level: U}
+          needs_create_integration: true
+        - name: TRANSFORM
+          comment: "read RAW/SHARED, read-write STAGING for the Customer domain"
+          database_role_grants:
+            - {schema: RAW, level: R}
+            - {schema: STAGING, level: W}
+            - {schema: MARTS, level: W}
+            - {schema: SHARED, level: R}
+          warehouse_grants:
+            - {purpose: TRANSFORM, level: U}
+          needs_create_schema: true
+        - name: READER
+          comment: "read Customer domain curated MARTS"
+          database_role_grants:
+            - {schema: MARTS, level: R}
+          warehouse_grants:
+            - {purpose: REPORTING, level: U}
+
+      tables:
+        - schema: RAW
+          name: CUSTOMERS
+          comment: "Raw landing table for customer records, loaded by the Snowpipe ingestion pipeline"
+          columns:
+            - {name: CUSTOMER_ID, type: NUMBER, comment: "Unique customer identifier"}
+            - {name: CUSTOMER_NAME, type: VARCHAR, comment: "Customer display name"}
+
+    # TEST tier — identical domain structure to CUSTOMER/DEV above (same schemas,
+    # warehouses, functional_roles, tables: these are domain-structural, not
+    # environment-specific), differing only in env (-> TEST_CUSTOMER_DB naming, via
+    # db_name() in domain_macros.sql) and the two service personas' oidc_user values,
+    # which point at the TEST-scoped identities (terraform/domains_test.yaml) instead of
+    # DEV's -- reusing DEV's identities here would grant a DEV identity TEST-tier roles,
+    # defeating the whole point of having separate tiers.
+    CUSTOMER_TEST:
+      env: TEST
+      domain: CUSTOMER
+      domain_comment: "Customer domain — raw, staging, marts and shared objects for this domain (TEST tier)"
+      policy_schema: SHARED
+
+      warehouses:
+        - purpose: INGEST
+          size: XSMALL
+          auto_suspend: 60
+          comment: "Data loading and ingestion workloads"
+        - purpose: TRANSFORM
+          size: XSMALL
+          auto_suspend: 120
+          comment: "dbt transformations and ELT workloads"
+        - purpose: REPORTING
+          size: XSMALL
+          auto_suspend: 60
+          comment: "BI tools and ad-hoc reporting queries"
+
+      schemas:
+        - name: RAW
+          comment: "Landing zone for Snowpipe ingestion (Repo 2, data-ingestion-raw)"
+          write_create_privileges: "CREATE STAGE, CREATE FILE FORMAT, CREATE PIPE"
+        - name: STAGING
+          comment: "Intermediate dbt models (Repo 3, customer-domain-dbt)"
+          write_create_privileges: "CREATE VIEW"
+        - name: MARTS
+          comment: "Final business-facing data marts for the Customer domain"
+          write_create_privileges: "CREATE TABLE"
+          w_comment_suffix: " - dbt builds dim_customers here"
+        - name: SHARED
+          comment: "Shared UDFs, procedures and reference data for the Customer domain"
+          read_only: true
+          r_comment_suffix: " (shared UDFs/procedures)"
+
+      personas:
+        - name: DATA_ENGINEER
+          comment: "engineers who land and maintain Customer domain RAW data"
+          functional_roles: [INGEST]
+          extra_warehouse_grants:
+            - {purpose: INGEST, level: O}
+        - name: DATA_ANALYST
+          comment: "analysts who query Customer domain curated marts"
+          functional_roles: [READER]
+        - name: DATA_CONSUMER
+          comment: "downstream/BI consumers of Customer domain curated marts"
+          functional_roles: [READER]
+        - name: DBT_SERVICE
+          comment: "the dbt service identity (Repo 3, customer-domain-dbt) that runs Customer domain transformations (TEST tier)"
+          oidc_user: GITHUB_TEST_CUSTOMER_DBT_SVC
+          functional_roles: [TRANSFORM]
+        - name: INGEST_SERVICE
+          comment: "the Snowpipe ingestion service identity (Repo 2, data-ingestion-raw) that loads Customer domain RAW data (TEST tier)"
+          oidc_user: GITHUB_TEST_CUSTOMER_INGEST_SVC
           functional_roles: [INGEST]
 
       functional_roles:
