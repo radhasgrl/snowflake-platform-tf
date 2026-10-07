@@ -12,3 +12,4 @@ targets:
   ACCOUNT:
     project_name: DEV_ADMIN_DB.DCM.ACCOUNT_DCM
     account_identifier: xygpmhm-gq04150
+# (no-op comment -- verifying required status check names after the workflow split)
