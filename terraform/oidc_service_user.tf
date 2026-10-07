@@ -115,6 +115,106 @@ resource "snowflake_grant_account_role" "github_dev_dcm_securityadmin" {
   depends_on = [snowflake_execute.github_dev_dcm_service_user]
 }
 
+# TEST-tier platform identities — identical pattern to the DEV identities above, just a
+# different GitHub Environment name in the SUBJECT claim (environment:TEST-Terraform /
+# environment:TEST-DCM instead of environment:DEV-Terraform / environment:DEV-DCM). These
+# are genuinely separate Snowflake users from their DEV counterparts: a TEST deploy must
+# never be able to authenticate as, or be confused with, a DEV deploy. TEST-Terraform and
+# TEST-DCM GitHub Environments (with a required-reviewer protection rule) are what actually
+# gate when these identities' tokens can be minted at all -- see promote.yml.
+resource "snowflake_execute" "github_test_terraform_service_user" {
+  provider = snowflake.useradmin
+
+  execute = <<-SQL
+    CREATE USER IF NOT EXISTS GITHUB_TEST_TERRAFORM_SVC
+      TYPE = SERVICE
+      COMMENT = 'GitHub Actions OIDC identity for the TEST-Terraform environment (promote.yml)'
+      WORKLOAD_IDENTITY = (
+        TYPE = OIDC
+        ISSUER = 'https://token.actions.githubusercontent.com'
+        SUBJECT = 'repo:radhasgrl@43290275/snowflake-platform-tf@1351137236:environment:TEST-Terraform'
+      )
+  SQL
+
+  revert = "DROP USER IF EXISTS GITHUB_TEST_TERRAFORM_SVC"
+}
+
+resource "snowflake_grant_account_role" "github_test_terraform_sysadmin" {
+  provider  = snowflake.useradmin
+  role_name = "SYSADMIN"
+  user_name = "GITHUB_TEST_TERRAFORM_SVC"
+
+  depends_on = [snowflake_execute.github_test_terraform_service_user]
+}
+
+resource "snowflake_grant_account_role" "github_test_terraform_useradmin" {
+  provider  = snowflake.useradmin
+  role_name = "USERADMIN"
+  user_name = "GITHUB_TEST_TERRAFORM_SVC"
+
+  depends_on = [snowflake_execute.github_test_terraform_service_user]
+}
+
+resource "snowflake_grant_account_role" "github_test_terraform_securityadmin" {
+  provider  = snowflake.useradmin
+  role_name = "SECURITYADMIN"
+  user_name = "GITHUB_TEST_TERRAFORM_SVC"
+
+  depends_on = [snowflake_execute.github_test_terraform_service_user]
+}
+
+resource "snowflake_execute" "github_test_dcm_service_user" {
+  provider = snowflake.useradmin
+
+  execute = <<-SQL
+    CREATE USER IF NOT EXISTS GITHUB_TEST_DCM_SVC
+      TYPE = SERVICE
+      COMMENT = 'GitHub Actions OIDC identity for the TEST-DCM environment (promote.yml)'
+      WORKLOAD_IDENTITY = (
+        TYPE = OIDC
+        ISSUER = 'https://token.actions.githubusercontent.com'
+        SUBJECT = 'repo:radhasgrl@43290275/snowflake-platform-tf@1351137236:environment:TEST-DCM'
+      )
+  SQL
+
+  revert = "DROP USER IF EXISTS GITHUB_TEST_DCM_SVC"
+}
+
+# See github_dev_dcm_service_user_defaults' identical comment above for why this is a
+# separate resource and why secondary roles matter here.
+resource "snowflake_execute" "github_test_dcm_service_user_defaults" {
+  provider = snowflake.useradmin
+
+  execute = "ALTER USER GITHUB_TEST_DCM_SVC SET DEFAULT_ROLE = SYSADMIN, DEFAULT_SECONDARY_ROLES = ('ALL')"
+  revert  = "ALTER USER GITHUB_TEST_DCM_SVC UNSET DEFAULT_ROLE, DEFAULT_SECONDARY_ROLES"
+
+  depends_on = [snowflake_execute.github_test_dcm_service_user]
+}
+
+resource "snowflake_grant_account_role" "github_test_dcm_sysadmin" {
+  provider  = snowflake.useradmin
+  role_name = "SYSADMIN"
+  user_name = "GITHUB_TEST_DCM_SVC"
+
+  depends_on = [snowflake_execute.github_test_dcm_service_user]
+}
+
+resource "snowflake_grant_account_role" "github_test_dcm_useradmin" {
+  provider  = snowflake.useradmin
+  role_name = "USERADMIN"
+  user_name = "GITHUB_TEST_DCM_SVC"
+
+  depends_on = [snowflake_execute.github_test_dcm_service_user]
+}
+
+resource "snowflake_grant_account_role" "github_test_dcm_securityadmin" {
+  provider  = snowflake.useradmin
+  role_name = "SECURITYADMIN"
+  user_name = "GITHUB_TEST_DCM_SVC"
+
+  depends_on = [snowflake_execute.github_test_dcm_service_user]
+}
+
 # Per-domain dbt/ingestion identities (Repo 3's and Repo 2's OIDC users) have moved to
 # domain_identities.tf — a for_each-driven pattern so onboarding domain #2+ is one new map
 # entry, not a hand-written copy of these two resources. See that file and README.md's
