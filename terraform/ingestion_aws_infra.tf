@@ -80,6 +80,13 @@ resource "aws_iam_role_policy" "ingestion_bucket_access" {
 # Actions role above. Trust policy already tightened to Snowflake's real IAM user (not a
 # placeholder) — values confirmed via `DESC INTEGRATION DEV_CUSTOMER_RAW_S3_INTEGRATION`
 # when this was first set up in Repo 2.
+#
+# sts:ExternalId is a LIST, not a single value: each separate storage integration object
+# (one per domain per environment -- e.g. the DEV Customer integration and the TEST
+# Customer integration created for promote.yml) gets its own unique external ID from
+# Snowflake, even though they all share this same IAM user ARN. Confirmed via a real
+# `DESC INTEGRATION CUSTOMER_TEST_RAW_S3_INTEGRATION` during Repo 2's Phase B TEST
+# promotion work -- its external ID genuinely differs from the original DEV integration's.
 resource "aws_iam_role" "snowflake_storage_integration" {
   name = "data-ingestion-raw-snowflake-storage-integration"
 
@@ -94,7 +101,10 @@ resource "aws_iam_role" "snowflake_storage_integration" {
         Action = "sts:AssumeRole"
         Condition = {
           StringEquals = {
-            "sts:ExternalId" = "VI78575_SFCRole=5067_APry05W3ikq5QIYzhvgRm9D+Yi8="
+            "sts:ExternalId" = [
+              "VI78575_SFCRole=5067_APry05W3ikq5QIYzhvgRm9D+Yi8=", # DEV Customer integration
+              "VI78575_SFCRole=5470_NPWnwPsunUhyGynZ6Xfu5WYxNvw=", # TEST Customer integration
+            ]
           }
         }
       }
