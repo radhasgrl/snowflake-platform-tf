@@ -436,35 +436,91 @@ manifests iterated far more often).
 
 ## Destroying / Decommissioning Resources
 
-There is no automatic destroy trigger — deliberately. `.github/workflows/destroy.yml` is
-**manual-only** (`workflow_dispatch`), and every layer requires typing an exact
-confirmation phrase before anything destructive runs, checked in a separate `guard` job
-first. Nothing downstream executes if the phrase doesn't match exactly.
+**Deliberately not part of CI/CD.** An earlier version of this repo had a guarded,
+manual-trigger `destroy.yml` GitHub Actions workflow — removed after reconsidering the
+trade-off: a typed-confirmation guard only stops *accidental* triggers, not a malicious or
+careless *intentional* one, and anyone who can hit `workflow_dispatch` could already type
+the confirmation phrase on purpose. Putting a destroy path in the same CI/CD trust boundary
+that deploys the platform means any future CI compromise (leaked token, malicious PR from a
+fork, compromised collaborator account) could reach destroy too, not just deploy. This
+matches the infra-platform reference's own restraint: it only ever automates
+`snow dcm purge` against its disposable sandbox tier — never against its real, persistent
+environments. Our `DEV` is the only environment this whole demo runs on, so it gets the
+same restraint.
 
-| Layer | Destroys | Confirmation phrase |
-|---|---|---|
-| `dcm-domain` | One domain's database, schemas, warehouses, roles (not the DCM project container) | the domain name, e.g. `customer` |
-| `dcm-account` | `DEV_DEPLOY_WH` (the account-level project's only managed object) | `ACCOUNT` |
-| `terraform` | The 4 OIDC identities, `DEV_ADMIN_DB`, and Repo 2's S3 bucket + IAM roles | `DESTROY-TERRAFORM-EVERYTHING` |
+Destroying is a human-operated, local-only runbook instead — authenticated as yourself
+(MFA-gated `externalbrowser`/admin login), not via a CI service identity.
 
-**Destroy in this order** if tearing down multiple layers: `dcm-domain` first, then
-`dcm-account`, then `terraform` **last** — Terraform owns the identities every other layer
-(and Repos 2/3) authenticate as, so destroying it first strands everything else mid-teardown.
+**Destroy in this order** if tearing down multiple layers: DCM domain(s) first, then the
+DCM account project, then Terraform **last** — Terraform owns the identities every other
+layer (and Repos 2/3) authenticate as, so destroying it first strands everything else
+mid-teardown.
+
+### 1. One domain's DCM objects
 
 ```powershell
-gh workflow run destroy.yml --repo radhasgrl/snowflake-platform-tf \
-  -f layer=dcm-domain -f domain=customer -f confirm=customer
+snow connection add --connection-name manual_admin --account xygpmhm-gq04150 `
+  --user <your-username> --role SYSADMIN --authenticator externalbrowser --no-interactive
+cd dcm
+bash sync-domain.sh customer   # synthesize the domain's sources/ (purge needs them resolvable)
+snow dcm purge --target CUSTOMER --from domains/customer --force -c manual_admin
 ```
 
-**Known, disclosed risk with the `terraform` layer** — not verified against live
-infrastructure in this session: `terraform destroy` here runs authenticated *as*
-`GITHUB_DEV_TERRAFORM_SVC`, and will drop that very user as part of the destroy. Terraform
-destroys in reverse-dependency order, so the identity is likely dropped near the end of the
-run; the already-established OIDC session for that job will likely keep working for the
-rest of that run (Snowflake doesn't typically force-disconnect an active session just
-because the underlying user row was dropped), but this hasn't been tested end-to-end. For a
-zero-doubt teardown of the Terraform layer, run `terraform destroy` locally instead,
-authenticated as a human admin (e.g. `externalbrowser`/MFA) rather than via this CI identity.
+Drops that domain's database, schemas, warehouses, and roles — **not** the DCM project
+object itself, which stays behind empty and can be redeployed into later.
+
+### 2. The DCM account project
+
+```powershell
+snow dcm purge --target ACCOUNT --from account --force -c manual_admin
+```
+
+Drops `DEV_DEPLOY_WH` — the account-level project's only managed object today.
+
+### 3. Terraform (last, and the one genuine technical wrinkle)
+
+`terraform/providers.tf` hardcodes `authenticator = "WORKLOAD_IDENTITY"` on every Snowflake
+provider block — which, per the "Local Terraform verification" note above, **only works
+inside real GitHub Actions**. Running `terraform destroy` locally therefore needs a local,
+human-authenticated override of those two providers first. Terraform has a native mechanism
+for exactly this — a `*_override.tf` file, already covered by `.gitignore`, so it can never
+accidentally be committed:
+
+```hcl
+# terraform/local_admin_override.tf — LOCAL ONLY, gitignored, never commit. Overrides
+# useradmin/sysadmin to use your own MFA-authenticated login instead of WORKLOAD_IDENTITY
+# (CI-only), so `terraform destroy` can run as a human, locally.
+provider "snowflake" {
+  alias             = "useradmin"
+  organization_name = "xygpmhm"
+  account_name      = "gq04150"
+  user              = "<your-username>"
+  role              = "USERADMIN"
+  authenticator     = "externalbrowser"
+}
+
+provider "snowflake" {
+  alias             = "sysadmin"
+  organization_name = "xygpmhm"
+  account_name      = "gq04150"
+  user              = "<your-username>"
+  role              = "SYSADMIN"
+  authenticator     = "externalbrowser"
+}
+```
+
+Then, with valid local AWS credentials (for the S3 backend) and this override file in place:
+
+```powershell
+cd terraform
+terraform init -backend-config="env/dev/backend.hcl"
+terraform destroy -var-file="env/dev/dev.tfvars"
+# review the plan carefully, then type 'yes' when prompted
+```
+
+Destroys the 4 OIDC identities, `DEV_ADMIN_DB`, and Repo 2's S3 bucket + IAM roles. Delete
+`terraform/local_admin_override.tf` again once done (or just leave it — it's gitignored and
+inert until the next local Terraform run).
 
 ---
 
