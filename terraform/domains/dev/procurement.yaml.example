@@ -1,0 +1,20 @@
+# Domain #2 (Procurement) -- TEMPLATE ONLY. The .yaml.example extension is deliberate: the
+# fileset() glob in domain_identities.tf only matches "*.yaml", so this file is inert by
+# construction -- it can never accidentally be merged into the live `domains` map and
+# create real Snowflake identities, no matter what else changes. To actually onboard
+# Procurement: rename this to procurement.yaml, fill in dbt_repo_id below (once that repo
+# exists -- `gh api repos/radhasgrl/procurement-domain-dbt --jq .id`), and create a
+# DEV-Ingest-Procurement GitHub Environment in data-ingestion-raw. See README.md's
+# "Onboarding a New Domain" section for the full procedure.
+procurement:
+  dbt_service_user: "GITHUB_DEV_PROCUREMENT_DBT_SVC"
+  dbt_repo: "procurement-domain-dbt"
+  dbt_repo_label: "procurement-domain-dbt (Repo 3b)"
+  dbt_repo_id: "<fill in once that repo exists>"
+  dbt_github_environment: "DEV-dbt"
+
+  ingest_service_user: "GITHUB_DEV_PROCUREMENT_INGEST_SVC"
+  ingest_repo: "data-ingestion-raw"
+  ingest_repo_label: "data-ingestion-raw (Repo 2)"
+  ingest_repo_id: "1405785591"
+  ingest_github_environment: "DEV-Ingest-Procurement"
