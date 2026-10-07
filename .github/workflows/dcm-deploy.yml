@@ -45,9 +45,12 @@ jobs:
 
     steps:
       # workflow_run gives the exact commit that triggered Terraform Apply -- for a push
-      # event (the only realistic trigger here), that's always main's new tip.
+      # event (the only realistic trigger here), that's always main's new tip. Runs before
+      # checkout, so it must override the job's dcm/ default working-directory (which
+      # doesn't exist on disk yet at this point).
       - name: Resolve head commit to deploy
         id: resolve
+        working-directory: .
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "head_sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
