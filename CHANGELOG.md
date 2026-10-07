@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/radhasgrl/snowflake-platform-tf/compare/v1.2.0...v1.3.0) (2026-10-07)
+
+
+### Features
+
+* **terraform:** promote Terraform by tag, same as DCM ([#49](https://github.com/radhasgrl/snowflake-platform-tf/issues/49)) ([e5cc741](https://github.com/radhasgrl/snowflake-platform-tf/commit/e5cc741aa37fcee8a4469734248efe45b25d9f1c))
+
 ## [1.2.0](https://github.com/radhasgrl/snowflake-platform-tf/compare/v1.1.1...v1.2.0) (2026-10-07)
 
 
