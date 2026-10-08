@@ -113,11 +113,8 @@ templating:
           warehouse_grants:
             - {purpose: REPORTING, level: U}
 
-      tables: []
-
     # TEST tier — identical domain structure to CUSTOMER/DEV above (same schemas,
-    # warehouses, functional_roles, tables: these are domain-structural, not
-    # environment-specific), differing only in env (-> TEST_CUSTOMER_DB naming, via
+    # warehouses, functional_roles), differing only in env (-> TEST_CUSTOMER_DB naming, via
     # db_name() in domain_macros.sql) and the two service personas' oidc_user values,
     # which point at the TEST-scoped identities (terraform/domains/test/customer.yaml) instead of
     # DEV's -- reusing DEV's identities here would grant a DEV identity TEST-tier roles,
@@ -144,8 +141,8 @@ templating:
 
       schemas:
         - name: RAW
-          comment: "Landing zone for Snowpipe ingestion (Repo 2, data-ingestion-raw)"
-          write_create_privileges: "CREATE STAGE, CREATE FILE FORMAT, CREATE PIPE"
+          comment: "Landing zone for Snowpipe ingestion (Repo 2, data-ingestion-raw). Table DDL is owned by Repo 3 (dbt), not DCM -- see customer-domain-dbt macros/create_raw_tables.sql."
+          write_create_privileges: "CREATE STAGE, CREATE FILE FORMAT, CREATE PIPE, CREATE TABLE"
         - name: STAGING
           comment: "Intermediate dbt models (Repo 3, customer-domain-dbt)"
           write_create_privileges: "CREATE VIEW"
@@ -190,7 +187,7 @@ templating:
         - name: TRANSFORM
           comment: "read RAW/SHARED, read-write STAGING for the Customer domain"
           database_role_grants:
-            - {schema: RAW, level: R}
+            - {schema: RAW, level: W}
             - {schema: STAGING, level: W}
             - {schema: MARTS, level: W}
             - {schema: SHARED, level: R}
@@ -203,11 +200,3 @@ templating:
             - {schema: MARTS, level: R}
           warehouse_grants:
             - {purpose: REPORTING, level: U}
-
-      tables:
-        - schema: RAW
-          name: CUSTOMERS
-          comment: "Raw landing table for customer records, loaded by the Snowpipe ingestion pipeline"
-          columns:
-            - {name: CUSTOMER_ID, type: NUMBER, comment: "Unique customer identifier"}
-            - {name: CUSTOMER_NAME, type: VARCHAR, comment: "Customer display name"}
