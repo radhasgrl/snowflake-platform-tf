@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.4.0](https://github.com/radhasgrl/snowflake-platform-tf/compare/v1.3.0...v1.4.0) (2026-10-08)
+
+
+### Features
+
+* **terraform:** split domains.yaml/domains_test.yaml into one file per domain ([#53](https://github.com/radhasgrl/snowflake-platform-tf/issues/53)) ([51cfdab](https://github.com/radhasgrl/snowflake-platform-tf/commit/51cfdabbaab40e1693659c3eb0436732880d0c21))
+
+
+### Bug Fixes
+
+* **customer:** move RAW.CUSTOMERS table ownership to dbt (Repo 3) ([#55](https://github.com/radhasgrl/snowflake-platform-tf/issues/55)) ([fefa240](https://github.com/radhasgrl/snowflake-platform-tf/commit/fefa24094eec48a14fe2484e843129df12042a88))
+* **dcm:** remove tables.sql entirely -- table DDL is Repo 3's job, never DCM's ([#56](https://github.com/radhasgrl/snowflake-platform-tf/issues/56)) ([975f8c8](https://github.com/radhasgrl/snowflake-platform-tf/commit/975f8c85a901e003f16859b0b47e565ec2e0ac57))
+
 ## [1.3.0](https://github.com/radhasgrl/snowflake-platform-tf/compare/v1.2.0...v1.3.0) (2026-10-07)
 
 
