@@ -46,8 +46,8 @@ templating:
 
       schemas:
         - name: RAW
-          comment: "Landing zone for Snowpipe ingestion (Repo 2, data-ingestion-raw)"
-          write_create_privileges: "CREATE STAGE, CREATE FILE FORMAT, CREATE PIPE"
+          comment: "Landing zone for Snowpipe ingestion (Repo 2, data-ingestion-raw). Table DDL is owned by the domain's own dbt repo, not DCM."
+          write_create_privileges: "CREATE STAGE, CREATE FILE FORMAT, CREATE PIPE, CREATE TABLE"
         - name: STAGING
           comment: "Intermediate dbt models (Repo 3b, procurement-domain-dbt)"
           write_create_privileges: "CREATE VIEW"
@@ -92,7 +92,7 @@ templating:
         - name: TRANSFORM
           comment: "read RAW/SHARED, read-write STAGING for the Procurement domain"
           database_role_grants:
-            - {schema: RAW, level: R}
+            - {schema: RAW, level: W}
             - {schema: STAGING, level: W}
             - {schema: MARTS, level: W}
             - {schema: SHARED, level: R}
@@ -105,14 +105,3 @@ templating:
             - {schema: MARTS, level: R}
           warehouse_grants:
             - {purpose: REPORTING, level: U}
-
-      tables:
-        - schema: RAW
-          name: PURCHASE_ORDERS
-          comment: "Raw landing table for purchase order records, loaded by the Snowpipe ingestion pipeline"
-          columns:
-            - {name: PURCHASE_ORDER_ID, type: NUMBER, comment: "Unique purchase order identifier"}
-            - {name: VENDOR_NAME, type: VARCHAR, comment: "Supplier/vendor name"}
-            - {name: ORDER_DATE, type: DATE, comment: "Date the purchase order was placed"}
-            - {name: TOTAL_AMOUNT, type: NUMBER(12,2), comment: "Total purchase order value"}
-            - {name: STATUS, type: VARCHAR, comment: "Purchase order status (e.g. OPEN, RECEIVED, CLOSED)"}

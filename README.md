@@ -155,8 +155,7 @@ Nothing Terraform-related lives outside `terraform/`; nothing DCM-related lives 
 │   │   │   ├── database_roles.sql    # Tier 3 database roles (schema-scoped read/write)
 │   │   │   ├── grants.sql            # wires Tier 3/4 -> Tier 2 -> Tier 1
 │   │   │   ├── masking.sql
-│   │   │   ├── row_access.sql
-│   │   │   └── tables.sql            # RAW.CUSTOMERS — loaded by Repo 2, read by Repo 3
+│   │   │   └── row_access.sql
 │   │   └── macros/
 │   │       └── domain_macros.sql     # reusable naming/role/grant macros, shared by every domain
 │   ├── _validate_render.py           # offline, Snowflake-free check that a domain's
@@ -164,7 +163,7 @@ Nothing Terraform-related lives outside `terraform/`; nothing DCM-related lives 
 │   ├── domains/
 │   │   ├── customer/
 │   │   │   ├── manifest.yml          # Customer's own config — schemas, personas, functional
-│   │   │   │                         #   roles, warehouses, tables. Zero SQL. LIVE/deployed.
+│   │   │   │                         #   roles, warehouses. Zero SQL. LIVE/deployed.
 │   │   │   └── sources/              # SYNTHESIZED by sync-domain.sh from dcm/sources/ —
 │   │   │                             #   gitignored, never committed, regenerated every run
 │   │   └── procurement/
@@ -217,18 +216,20 @@ silently drifting.
 |---|---|
 | `GITHUB_DEV_INGEST_SVC` identity + `DEV_CUSTOMER_INGEST_SERVICE_PRSN` role | Repo 2 (`data-ingestion-raw`) authenticates as this identity to deploy/run its Snowpipe SQL |
 | `GITHUB_DEV_DBT_SVC` identity + `DEV_CUSTOMER_DBT_SERVICE_PRSN` role | Repo 3 (`customer-domain-dbt`) authenticates as this identity to run `dbt build` |
-| `DEV_CUSTOMER_DB.RAW.CUSTOMERS` table (`dcm/sources/definitions/tables.sql`) | Repo 2 loads into it; Repo 3 reads it as a dbt source |
+| `DEV_CUSTOMER_DB.RAW` schema + its `CREATE TABLE`/`CREATE STAGE`/`CREATE FILE FORMAT`/`CREATE PIPE` grants (`dcm/sources/definitions/schemas.sql`, `grants.sql`) | Repo 3 creates `RAW.CUSTOMERS` itself (`macros/create_raw_tables.sql`); Repo 2 loads into it; Repo 3 also reads it as a dbt source |
 | `DEV_CUSTOMER_DB.STAGING` / `.MARTS` schemas, `DEV_CUSTOMER_TRANSFORM_WH` warehouse | Repo 3 builds its dbt models into these |
 | S3 bucket `data-ingestion-raw-525218385225` + 2 IAM roles (`terraform/ingestion_aws_infra.tf`) | Repo 2's CI assumes one role to manage the bucket; Snowflake's storage integration assumes the other to read it |
 | `.github/workflows/dbt-build-reusable.yml` (`workflow_call`) | Every per-domain dbt repo (Repo 3 and its future siblings) calls this instead of defining its own dbt build logic — see "Centrally-maintained CI for Repo 3" below |
 
 **What Repo 2/3 developers can do independently** (no Repo 1 PR needed): add a new
 pipe/stage reading from the same bucket into the same existing table (Repo 2); add a new
-dbt model reading existing sources into the existing `STAGING`/`MARTS` schemas (Repo 3).
+dbt model reading existing sources into the existing `STAGING`/`MARTS` schemas, or a new
+RAW table (via a new `on-run-start` macro, same pattern as `create_raw_tables.sql`) (Repo 3).
 
-**What requires a Repo 1 PR first**: a new source needing its own new RAW table/schema, a
-new AWS bucket or broader privileges, a new domain database, or standing up a brand-new
-downstream repo for a new domain team — anything that doesn't exist yet in Repo 1's
+**What requires a Repo 1 PR first**: a new RAW *schema* (not table — tables are Repo 3's
+responsibility, schemas are Repo 1's), a new AWS bucket or broader privileges, a new
+domain database, or standing up a brand-new downstream repo for a new domain team —
+anything that doesn't exist yet in Repo 1's
 Terraform/DCM definitions.
 
 ### Centrally-maintained CI for Repo 3
@@ -706,8 +707,8 @@ hypothetical. `dcm/domains/procurement/manifest.yml` exists in this repo right n
 (see "Known Limitations" below for why).
 
 1. **Write `dcm/domains/<domain>/manifest.yml`.** Copy an existing domain's manifest, change
-   `domain`, `domain_comment`, and the `schemas`/`warehouses`/`personas`/`functional_roles`/
-   `tables` values to match the new domain. Give it its **own new `project_name`**
+   `domain`, `domain_comment`, and the `schemas`/`warehouses`/`personas`/`functional_roles`
+   values to match the new domain. Give it its **own new `project_name`**
    (e.g. `DEV_ADMIN_DB.DCM.PROCUREMENT_DCM`) — brand-new domains always get a fresh DCM
    project; only Customer stayed on the pre-templating project for migration-safety
    reasons (see History above). No SQL is written by hand anywhere in this step.
