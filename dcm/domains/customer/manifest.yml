@@ -31,7 +31,7 @@ templating:
     CUSTOMER:
       env: DEV
       domain: CUSTOMER
-      domain_comment: "Customer domain — raw, staging, marts and shared objects for this domain"
+      domain_comment: "Customer domain- raw, staging, marts and shared objects for this domain"
       policy_schema: SHARED
 
       # Per-domain workload warehouses (Tier 4) — not shared with any other domain. See
