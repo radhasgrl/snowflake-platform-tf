@@ -53,8 +53,8 @@ templating:
 
       schemas:
         - name: RAW
-          comment: "Landing zone for Snowpipe ingestion (Repo 2, data-ingestion-raw)"
-          write_create_privileges: "CREATE STAGE, CREATE FILE FORMAT, CREATE PIPE"
+          comment: "Landing zone for Snowpipe ingestion (Repo 2, data-ingestion-raw). Table DDL is owned by Repo 3 (dbt), not DCM -- see customer-domain-dbt's macros/create_raw_tables.sql."
+          write_create_privileges: "CREATE STAGE, CREATE FILE FORMAT, CREATE PIPE, CREATE TABLE"
         - name: STAGING
           comment: "Intermediate dbt models (Repo 3, customer-domain-dbt)"
           write_create_privileges: "CREATE VIEW"
@@ -99,7 +99,7 @@ templating:
         - name: TRANSFORM
           comment: "read RAW/SHARED, read-write STAGING for the Customer domain"
           database_role_grants:
-            - {schema: RAW, level: R}
+            - {schema: RAW, level: W}
             - {schema: STAGING, level: W}
             - {schema: MARTS, level: W}
             - {schema: SHARED, level: R}
@@ -113,13 +113,7 @@ templating:
           warehouse_grants:
             - {purpose: REPORTING, level: U}
 
-      tables:
-        - schema: RAW
-          name: CUSTOMERS
-          comment: "Raw landing table for customer records, loaded by the Snowpipe ingestion pipeline"
-          columns:
-            - {name: CUSTOMER_ID, type: NUMBER, comment: "Unique customer identifier"}
-            - {name: CUSTOMER_NAME, type: VARCHAR, comment: "Customer display name"}
+      tables: []
 
     # TEST tier — identical domain structure to CUSTOMER/DEV above (same schemas,
     # warehouses, functional_roles, tables: these are domain-structural, not
