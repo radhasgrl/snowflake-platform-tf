@@ -53,7 +53,7 @@ templating:
 
       schemas:
         - name: RAW
-          comment: "Landing zone for Snowpipe ingestion (Repo 2, data-ingestion-raw). Table DDL is owned by Repo 3 (dbt), not DCM -- see customer-domain-dbt's macros/create_raw_tables.sql."
+          comment: "Landing zone for Snowpipe ingestion (Repo 2, data-ingestion-raw). Table DDL is owned by Repo 3 (dbt), not DCM -- see customer-domain-dbt macros/create_raw_tables.sql."
           write_create_privileges: "CREATE STAGE, CREATE FILE FORMAT, CREATE PIPE, CREATE TABLE"
         - name: STAGING
           comment: "Intermediate dbt models (Repo 3, customer-domain-dbt)"
